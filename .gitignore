@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.env
+data/
+backups/
+node_modules/
+frontend/dist/
+*.db
+*.db-wal
+*.db-shm
+.pnpm-store/
+.history/
