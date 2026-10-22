@@ -13,3 +13,5 @@ frontend/dist/
 *.db-shm
 .pnpm-store/
 .history/
+.deploy/
+uvicorn.log*

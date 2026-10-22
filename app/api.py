@@ -84,6 +84,23 @@ def event_dict(e):
             "quantity", "resolution", "enrichment_status", "snapshot")}
 
 
+async def event_details(db, rows):
+    """Fill missing group names from current profiles without rewriting event history."""
+    items = [event_dict(row) for row in rows]
+    missing = [row for row in rows if row.group_id and not row.snapshot.get("group_name")]
+    if missing:
+        profiles = (await db.scalars(select(Profile).where(
+            Profile.kind == "group", Profile.tenant_id.in_({row.tenant_id for row in missing}),
+            Profile.external_id.in_({row.group_id for row in missing})))).all()
+        names = {(p.tenant_id, p.external_id): p.data.get("name") for p in profiles}
+        for item in items:
+            name = names.get((item["tenant_id"], item["group_id"]))
+            if not item["snapshot"].get("group_name") and name:
+                item["snapshot"] = {**item["snapshot"], "group_name": name,
+                                    "group_name_source": "current_profile"}
+    return items
+
+
 class LoginInput(BaseModel):
     code: str = Field(min_length=1, max_length=2048)
 
@@ -275,7 +292,7 @@ async def events(request: Request, tenant_id: str = "all", start_date: date | No
         last = rows[limit - 1]
         next_cursor = encode_cursor({"upper": upper, "filter": fingerprint, "time": last.occurred_at, "id": last.id},
                                     request.app.state.settings.secret_key)
-    return result({"items": [event_dict(e) for e in rows[:limit]], "next_cursor": next_cursor,
+    return result({"items": await event_details(db, rows[:limit]), "next_cursor": next_cursor,
                    "total_records": total, "total_quantity": quantity})
 
 
@@ -285,7 +302,7 @@ async def event_detail(event_id: int, user=Depends(identity), db=Depends(databas
     row = await db.scalar(select(BusinessEvent).where(BusinessEvent.id == event_id, BusinessEvent.tenant_id.in_(ids)))
     if not row:
         raise HTTPException(404, "记录不存在")
-    return result(event_dict(row))
+    return result((await event_details(db, [row]))[0])
 
 
 @router.get("/api/v1/employees")

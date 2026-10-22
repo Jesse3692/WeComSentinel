@@ -27,6 +27,20 @@ const types = ['contact_added','contact_deleted','group_left','group_removed']
 const addWayLabel = (value: string | null) => ({'1':'扫描二维码','2':'搜索手机号','3':'名片分享','4':'群聊添加','5':'手机通讯录','6':'微信联系人'}[value || ''] || (value?'其他方式':'方式未知'))
 const dateText = (value: number) => new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(value)
 const tenantName = (id: number) => me.value?.tenants.find((t: AnyRow) => t.id === id)?.name || '未授权主体'
+const isGroupEvent = (row: AnyRow) => ['group_left', 'group_removed', 'group_change_unknown'].includes(row.event_type)
+const groupName = (row: AnyRow) => row.snapshot.group_name?.trim() || '未命名或群名称未提供'
+function eventLabel(row: AnyRow) {
+  const reported = row.snapshot.reported_event_type
+  if (row.event_type === 'group_change_unknown' && ['group_left', 'group_removed'].includes(reported)) {
+    return `${labels[reported]}（成员待核实）`
+  }
+  return labels[row.event_type]
+}
+function groupNote(row: AnyRow) {
+  const reported = row.snapshot.reported_event_type
+  const reason = ['group_left', 'group_removed'].includes(reported) ? labels[reported] : '群成员变更'
+  return `平台报告${reason} ${row.quantity} 人次。具体成员身份、是否为外部客户及操作人尚未确认，暂不计入已确认客户退群或被移出指标。`
+}
 function query(extra: Record<string,string> = {}) {
   const p = new URLSearchParams({tenant_id: tenant.value, ...extra})
   if(startDate.value) p.set('start_date',startDate.value)
@@ -183,7 +197,7 @@ onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();observer?.disconnect(
       </template>
       <template v-else-if="['added','deleted','groups'].includes(tab)">
         <section class="detail-toolbar"><div v-if="tab==='groups'" class="tabs"><button v-for="t in ['group_left','group_removed','group_change_unknown']" :class="{selected:groupType===t}" @click="groupType=t">{{labels[t]}}</button></div><label v-else>员工<select v-model="employee"><option value="">全部员工</option><option v-for="e in employees" :key="e.tenant_id+':'+e.id" :value="JSON.stringify([e.tenant_id,e.id])">{{e.name}} · {{tenantName(e.tenant_id)}}</option></select></label><label v-if="tab==='added'">添加方式<select v-model="addWay"><option value="">全部方式</option><option value="1">扫描二维码</option><option value="2">搜索手机号</option><option value="3">名片分享</option><option value="4">群聊添加</option><option value="5">手机通讯录</option><option value="6">微信联系人</option><option value="other">其他</option><option value="unknown">未知</option></select></label><input v-if="tab==='groups'" v-model="groupSearch" placeholder="搜索群名称" aria-label="群名称搜索"><span class="muted">{{totals.records}} 条记录 · {{totals.quantity}} 人次</span></section>
-        <section class="panel event-list"><div v-if="!records.length" class="empty"><span>◎</span><h3>{{loading?'正在加载…':'暂无数据'}}</h3><p>调整主体或日期范围后再试</p></div><button v-for="e in records" :key="e.id" class="event-row" @click="detail=e"><Avatar :name="e.snapshot.customer_name" :media-id="e.snapshot.customer_media_id" :warm="tab==='deleted'" /><div class="event-content"><strong>{{e.snapshot.customer_name || '成员待核实'}} <span v-if="e.quantity>1" class="badge">{{e.quantity}} 人次</span></strong><p v-if="e.event_type==='contact_added'">由 {{e.snapshot.employee_name}} 添加 · {{addWayLabel(e.add_way)}}</p><p v-else-if="e.event_type==='contact_deleted'">{{e.deletion_direction==='customer_deleted_employee'?'客户删除了员工':'员工删除了客户'}} · {{e.snapshot.employee_name}}</p><p v-else>{{labels[e.event_type]}} · {{e.snapshot.group_name}}<span v-if="e.operator_id"> · 操作人 {{e.operator_id}}</span></p><small>{{tenantName(e.tenant_id)}}<span v-if="e.resolution!=='exact'"> · 成员待核实</span><span v-if="e.enrichment_status!=='complete'"> · 资料待补全</span><span v-if="e.channel_state"> · 渠道 {{e.channel_state}}</span></small></div><time>{{dateText(e.occurred_at)}}</time><span class="muted">›</span></button></section>
+        <section class="panel event-list"><div v-if="!records.length" class="empty"><span>◎</span><h3>{{loading?'正在加载…':'暂无数据'}}</h3><p>调整主体或日期范围后再试</p></div><button v-for="e in records" :key="e.id" class="event-row" @click="detail=e"><Avatar :name="e.snapshot.customer_name" :media-id="e.snapshot.customer_media_id" :warm="tab==='deleted'" /><div class="event-content"><strong>{{isGroupEvent(e) ? groupName(e) : (e.snapshot.customer_name || '成员待核实')}} <span v-if="e.quantity>1" class="badge">{{e.quantity}} 人次</span></strong><p v-if="e.event_type==='contact_added'">由 {{e.snapshot.employee_name}} 添加 · {{addWayLabel(e.add_way)}}</p><p v-else-if="e.event_type==='contact_deleted'">{{e.deletion_direction==='customer_deleted_employee'?'客户删除了员工':'员工删除了客户'}} · {{e.snapshot.employee_name}}</p><p v-else>{{eventLabel(e)}} · {{groupName(e)}}<span v-if="e.operator_id"> · 操作人 {{e.operator_id}}</span></p><small>{{tenantName(e.tenant_id)}}<span v-if="e.resolution!=='exact'"> · 成员待核实</span><span v-if="e.enrichment_status!=='complete'"> · 资料待补全</span><span v-if="e.channel_state"> · 渠道 {{e.channel_state}}</span></small></div><time>{{dateText(e.occurred_at)}}</time><span class="muted">›</span></button></section>
         <div ref="sentinel" class="load-more"><button v-if="nextCursor" class="secondary" :disabled="loading" @click="loadMore">{{loading?'加载中…':'加载更多'}}</button><span v-else-if="records.length">已显示全部记录</span></div>
       </template>
       <section v-else-if="tab==='me'" class="panel profile"><Avatar :name="me.name" :url="me.avatar_url" large /><h2>{{me.name}}</h2><span class="badge">{{me.role==='admin'?'管理员':'普通用户'}}</span><h3>可访问主体</h3><div v-for="t in me.tenants" class="profile-tenant">◫ {{t.name}}</div><p v-if="!me.tenants.length" class="muted">暂无授权主体，请联系管理员。</p><button v-if="me.role==='admin'" class="secondary" @click="tab='admin'">管理主体与授权</button><button class="secondary" @click="logout">退出登录</button></section>
@@ -195,6 +209,50 @@ onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();observer?.disconnect(
       <footer class="page-footer">关系观察台 <span>数据按北京时间统计 · 每 30 秒更新总览</span></footer>
     </main>
     <nav class="mobile-nav"><button v-for="n in nav" :class="{active:tab===n.id}" @click="tab=n.id"><span>{{n.symbol}}</span>{{n.name}}</button></nav>
-    <div v-if="detail" class="modal-backdrop" @click.self="detail=null"><section class="modal" role="dialog" aria-modal="true" aria-label="事件详情"><button class="close" @click="detail=null" aria-label="关闭">×</button><p class="eyebrow">EVENT DETAIL</p><h2>{{labels[detail.event_type]}}</h2><dl><dt>所属主体</dt><dd>{{tenantName(detail.tenant_id)}}</dd><dt>发生时间</dt><dd>{{dateText(detail.occurred_at)}}</dd><dt>客户</dt><dd>{{detail.snapshot.customer_name || '未知'}}</dd><dt>员工</dt><dd>{{detail.snapshot.employee_name || '—'}}</dd><dt>群名称</dt><dd>{{detail.snapshot.group_name || '—'}}</dd><dt>操作人</dt><dd>{{detail.operator_id || '未提供'}}</dd><dt>客户类型</dt><dd>{{detail.snapshot.customer_type===1?'微信':detail.snapshot.customer_type===2?'企微':'未知'}}</dd><dt>性别</dt><dd>{{detail.snapshot.gender===1?'男':detail.snapshot.gender===2?'女':'未知'}}</dd><dt>所属企业</dt><dd>{{detail.snapshot.company_name || '未知'}}</dd><dt>添加方式编码</dt><dd>{{detail.add_way || '—'}}</dd><dt>渠道参数</dt><dd>{{detail.channel_state || '—'}}</dd><dt>人数</dt><dd>{{detail.quantity}}</dd><dt>数据状态</dt><dd>{{detail.resolution==='exact'?'已识别':'待核实'}} / {{detail.enrichment_status==='complete'?'资料齐全':'资料待补全'}}</dd></dl><p v-if="detail.snapshot.note" class="notice">{{detail.snapshot.note}}</p><p v-if="detail.snapshot.demo" class="notice">此条为模拟演示数据。</p></section></div>
+    <div v-if="detail" class="modal-backdrop" @click.self="detail=null">
+      <section class="modal" role="dialog" aria-modal="true" aria-label="事件详情">
+        <button class="close" @click="detail=null" aria-label="关闭">×</button>
+        <p class="eyebrow">EVENT DETAIL</p><h2>{{eventLabel(detail)}}</h2>
+        <dl>
+          <dt>所属主体</dt><dd>{{tenantName(detail.tenant_id)}}</dd>
+          <dt>发生时间</dt><dd>{{dateText(detail.occurred_at)}}</dd>
+          <template v-if="isGroupEvent(detail)">
+            <dt>{{detail.snapshot.group_name_source==='current_profile'?'群名称（当前）':'群名称'}}</dt><dd>{{groupName(detail)}}</dd>
+            <dt>变更类型</dt><dd>{{eventLabel(detail)}}</dd>
+            <dt>变更人数</dt><dd>{{detail.quantity}} 人次</dd>
+            <dt>涉及成员</dt><dd>{{detail.snapshot.customer_name || '具体成员尚未确认'}}</dd>
+            <dt v-if="detail.snapshot.group_owner_id">群主（非操作人）</dt><dd v-if="detail.snapshot.group_owner_id">{{detail.snapshot.group_owner_name || detail.snapshot.group_owner_id}}</dd>
+            <dt>操作人</dt><dd>{{detail.operator_id || '平台未提供'}}</dd>
+          </template>
+          <template v-else>
+            <dt>客户</dt><dd>{{detail.snapshot.customer_name || '未知'}}</dd>
+            <dt>员工</dt><dd>{{detail.snapshot.employee_name || '—'}}</dd>
+            <dt>操作人</dt><dd>{{detail.operator_id || '未提供'}}</dd>
+            <dt>客户类型</dt><dd>{{detail.snapshot.customer_type===1?'微信':detail.snapshot.customer_type===2?'企微':'未知'}}</dd>
+            <dt>性别</dt><dd>{{detail.snapshot.gender===1?'男':detail.snapshot.gender===2?'女':'未知'}}</dd>
+            <dt>所属企业</dt><dd>{{detail.snapshot.company_name || '未知'}}</dd>
+            <dt>添加方式编码</dt><dd>{{detail.add_way || '—'}}</dd>
+            <dt>渠道参数</dt><dd>{{detail.channel_state || '—'}}</dd>
+            <dt>人数</dt><dd>{{detail.quantity}}</dd>
+          </template>
+          <dt>数据状态</dt><dd>{{detail.resolution==='exact'?'已识别':'待核实'}} / {{detail.enrichment_status==='complete'?'资料齐全':'资料待补全'}}</dd>
+        </dl>
+        <template v-if="detail.snapshot.member_candidates?.length">
+          <h3>快照差异中的成员（待核实）</h3>
+          <dl v-for="(member,index) in detail.snapshot.member_candidates" :key="index">
+            <dt>成员</dt><dd>{{member.name || '名称未提供'}}</dd>
+            <dt>成员类型</dt><dd>{{member.member_type===1?'企业内部员工':member.member_type===2?'外部联系人':'未知'}}</dd>
+            <dt v-if="member.customer_type">客户类型</dt><dd v-if="member.customer_type">{{member.customer_type===1?'微信':member.customer_type===2?'企微':'未知'}}</dd>
+            <dt v-if="member.gender===1 || member.gender===2">性别</dt><dd v-if="member.gender===1 || member.gender===2">{{member.gender===1?'男':'女'}}</dd>
+            <dt v-if="member.company_name">所属企业</dt><dd v-if="member.company_name">{{member.company_name}}</dd>
+          </dl>
+          <p class="muted">以上资料来自变更前后群成员快照及已缓存联系人，不代表平台逐人确认了本次移除。</p>
+        </template>
+        <p v-else-if="detail.event_type==='group_change_unknown'" class="muted">{{detail.snapshot.member_evidence==='snapshot_difference_inconclusive'?'快照差异与报告人数不一致，暂不关联具体成员。':'缺少可用于识别本次离群成员的变更前快照。'}}</p>
+        <p v-if="detail.event_type==='group_change_unknown'" class="notice">{{groupNote(detail)}}</p>
+        <p v-else-if="detail.snapshot.note" class="notice">{{detail.snapshot.note}}</p>
+        <p v-if="detail.snapshot.demo" class="notice">此条为模拟演示数据。</p>
+      </section>
+    </div>
   </div>
 </template>

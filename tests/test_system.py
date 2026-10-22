@@ -200,6 +200,103 @@ async def test_group_does_not_invent_members_or_operator(system):
         assert row.resolution == "unresolved"
 
 
+async def test_group_snapshot_reuses_known_contact_details_as_unconfirmed_candidates(system):
+    app, client, _ = system
+    stamp = now_ms() // 1000
+    async with app.state.sessions() as db:
+        db.add_all([
+            Profile(tenant_id=1, kind="group", external_id="chat1", name="历史群名",
+                    synced_at=(stamp - 10) * 1000, data={"name": "历史群名", "member_list": [
+                        {"userid": "customer1", "type": 2}, {"userid": "employee1", "type": 1}]}),
+            Profile(tenant_id=1, kind="customer", external_id="customer1", name="已知客户",
+                    data={"name": "已知客户", "type": 1, "gender": 2, "corp_name": "客户企业"}),
+            Profile(tenant_id=2, kind="customer", external_id="customer1", name="其他主体客户",
+                    data={"name": "其他主体客户"}),
+            Profile(tenant_id=1, kind="employee", external_id="employee1", name="群主姓名", data={}),
+        ])
+        await db.commit()
+
+    async def group(*args):
+        return {"name": "", "owner": "employee1", "member_list": [{"userid": "employee1", "type": 1}]}
+    app.state.platforms.group = group
+    payload = {"Event": "change_external_chat", "ChangeType": "update", "CreateTime": str(stamp),
+               "ChatId": "chat1", "UpdateDetail": "del_member", "QuitScene": "1", "MemChangeCnt": "1"}
+    async with app.state.sessions() as db:
+        await enqueue(db, app.state.settings, 1, payload)
+    await app.state.worker.tick()
+    async with app.state.sessions() as db:
+        row = await db.scalar(select(BusinessEvent))
+        assert row.snapshot["group_name"] == "历史群名"
+        assert row.snapshot["group_owner_name"] == "群主姓名"
+        assert row.snapshot["member_evidence"] == "snapshot_difference"
+        assert row.snapshot["member_candidates"] == [{
+            "name": "已知客户", "member_type": 2, "customer_type": 1, "gender": 2,
+            "company_name": "客户企业", "media_id": None,
+        }]
+        assert row.customer_id is None and row.operator_id is None
+        assert row.event_type == "group_change_unknown" and row.resolution == "unresolved"
+        # A replay must not lose evidence after the group profile was updated.
+        job = await db.scalar(select(Job))
+        job.status, job.next_run_at = "retry", 0
+        await db.commit()
+    await app.state.worker.tick()
+    async with app.state.sessions() as db:
+        row = await db.scalar(select(BusinessEvent))
+        assert row.snapshot["member_candidates"][0]["name"] == "已知客户"
+        assert await db.scalar(select(func.count()).select_from(BusinessEvent)) == 1
+
+
+@pytest.mark.parametrize("scenario", ["after_event", "different_count", "concurrent_join"])
+async def test_group_snapshot_does_not_assign_ambiguous_members(system, scenario):
+    app, client, _ = system
+    stamp = now_ms() // 1000
+    old = [{"userid": "a", "type": 2}, {"userid": "b", "type": 2}]
+    current = [{"userid": "b", "type": 2}]
+    if scenario == "different_count":
+        current = []
+    elif scenario == "concurrent_join":
+        current.append({"userid": "c", "type": 2})
+    async with app.state.sessions() as db:
+        db.add(Profile(tenant_id=1, kind="group", external_id="chat1", name="测试群",
+                       synced_at=(stamp + 10 if scenario == "after_event" else stamp - 10) * 1000,
+                       data={"name": "测试群", "member_list": old}))
+        await db.commit()
+    async def group(*args):
+        return {"name": "测试群", "member_list": current}
+    app.state.platforms.group = group
+    async with app.state.sessions() as db:
+        await enqueue(db, app.state.settings, 1, {
+            "Event": "change_external_chat", "CreateTime": str(stamp), "ChatId": "chat1",
+            "ChangeType": "update", "UpdateDetail": "del_member", "QuitScene": "1", "MemChangeCnt": "1",
+        })
+    await app.state.worker.tick()
+    async with app.state.sessions() as db:
+        row = await db.scalar(select(BusinessEvent))
+        assert row.snapshot["member_candidates"] == []
+        assert row.customer_id is None and row.event_type == "group_change_unknown"
+
+
+async def test_missing_group_name_uses_same_tenant_current_profile_without_rewriting_history(system):
+    app, client, _ = system
+    event_id = await insert_event(app, kind="group_change_unknown")
+    async with app.state.sessions() as db:
+        row = await db.get(BusinessEvent, event_id)
+        row.snapshot = {"group_name": "", "reported_event_type": "group_removed"}
+        db.add_all([
+            Profile(tenant_id=1, kind="group", external_id="chat1", name="当前群名", data={"name": "当前群名"}),
+            Profile(tenant_id=2, kind="group", external_id="chat1", name="其他主体群名", data={"name": "其他主体群名"}),
+        ])
+        await db.commit()
+    await login(client)
+    detail = (await client.get(f"/api/v1/events/{event_id}")).json()["data"]
+    assert detail["snapshot"]["group_name"] == "当前群名"
+    assert detail["snapshot"]["group_name_source"] == "current_profile"
+    listed = (await client.get("/api/v1/events", params={"event_type": "group_change_unknown"})).json()["data"]
+    assert listed["items"][0]["snapshot"]["group_name"] == "当前群名"
+    async with app.state.sessions() as db:
+        assert (await db.get(BusinessEvent, event_id)).snapshot["group_name"] == ""
+
+
 async def test_dashboard_matches_details_and_previous_period(system):
     app, client, _ = system
     stamp = int(datetime(2026, 1, 1, 12, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp() * 1000)

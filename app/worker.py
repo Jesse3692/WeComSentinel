@@ -155,6 +155,55 @@ class Worker:
                         setattr(item, key, value)
             await db.commit()
 
+    async def group_snapshot(self, tenant, inbox, payload, previous, current):
+        """Use available profiles; snapshot differences remain candidates, never exact events."""
+        before = previous.data if previous else {}
+        current = current or {}
+        async with self.sessions() as db:
+            existing = await db.scalar(select(BusinessEvent).where(
+                BusinessEvent.tenant_id == tenant.id, BusinessEvent.callback_id == inbox.id,
+                BusinessEvent.item_key == "group"))
+            snapshot = dict(existing.snapshot) if existing else {}
+        name = current.get("name") or before.get("name") or snapshot.get("group_name")
+        snapshot["group_name"] = name or None
+        snapshot["group_name_source"] = (
+            "group_details" if current.get("name") else "cached" if name else "not_provided")
+        snapshot["reported_event_type"] = {"0": "group_left", "1": "group_removed"}.get(
+            str(payload.get("QuitScene")), "group_change_unknown")
+        snapshot["note"] = "平台提供了变更原因和人数；快照差异中的成员仅为待核实线索，不计入已确认客户退群或被踢指标。"
+        owner_id = current.get("owner") or before.get("owner")
+        if owner_id:
+            owner = await self.cached(tenant.id, "employee", owner_id)
+            snapshot["group_owner_id"] = owner_id
+            snapshot["group_owner_name"] = owner.name if owner else None
+        # A current group list cannot identify a past departure by itself.
+        if "member_candidates" not in snapshot:
+            snapshot["member_candidates"] = []
+            snapshot["member_evidence"] = "no_before_snapshot"
+            old_members, new_members = before.get("member_list"), current.get("member_list")
+            if (previous and previous.synced_at <= int(payload["CreateTime"]) * 1000
+                    and isinstance(old_members, list) and isinstance(new_members, list)):
+                old = {m["userid"]: m for m in old_members if m.get("userid")}
+                new = {m["userid"]: m for m in new_members if m.get("userid")}
+                removed = old.keys() - new.keys()
+                count = max(1, int(payload.get("MemChangeCnt", "1")))
+                snapshot["member_evidence"] = "snapshot_difference_inconclusive"
+                if len(removed) == count and not (new.keys() - old.keys()):
+                    for member_id in sorted(removed):
+                        member = old[member_id]
+                        kind = {1: "employee", 2: "customer"}.get(member.get("type"))
+                        profile = await self.cached(tenant.id, kind, member_id) if kind else None
+                        data = profile.data if profile else {}
+                        snapshot["member_candidates"].append({
+                            "name": data.get("name") or member.get("name") or None,
+                            "member_type": member.get("type"),
+                            "customer_type": data.get("type") if kind == "customer" else None,
+                            "gender": data.get("gender"), "company_name": data.get("corp_name"),
+                            "media_id": data.get("media_id"),
+                        })
+                    snapshot["member_evidence"] = "snapshot_difference"
+        return snapshot
+
     async def normalize(self, tenant, inbox, payload):
         change = payload.get("ChangeType")
         occurred = int(payload["CreateTime"]) * 1000
@@ -202,17 +251,13 @@ class Worker:
             except PlatformError as exc:
                 group_error = str(exc)
             if payload.get("UpdateDetail") == "del_member":
-                reported_type = {"0": "group_left", "1": "group_removed"}.get(str(payload.get("QuitScene")), "group_change_unknown")
                 quantity = max(1, int(payload.get("MemChangeCnt", "1")))
-                # Aggregate is authoritative only about reported count/reason, never guessed names.
-                group = current or (previous.data if previous else {})
+                snapshot = await self.group_snapshot(tenant, inbox, payload, previous, current)
                 await self.write_events(tenant.id, inbox.id, [{
                     "item_key": "group", "event_type": "group_change_unknown", "occurred_at": occurred,
                     "group_id": chat_id, "quantity": quantity, "resolution": "unresolved",
                     "enrichment_status": "partial",
-                    "snapshot": {"group_name": group.get("name", "未知群聊"),
-                                 "reported_event_type": reported_type,
-                                 "note": "仅有平台报告的变更人数，尚未确认具体成员、是否为外部联系人及操作人；不计入已确认退群或被踢指标。"},
+                    "snapshot": snapshot,
                 }])
             if current:
                 await self.put_profile(tenant.id, "group", chat_id, current)
