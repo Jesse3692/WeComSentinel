@@ -130,8 +130,11 @@ class Worker:
                 result = {**result["external_contact"], "follow_user": result.get("follow_user", [])}
             url = result.get("avatar")
             if url:
-                media_id = await save_avatar(self.settings, self.sessions, tenant.id, url)
-                result["media_id"] = media_id
+                # An avatar failure must not discard an already identified person's name/ID.
+                try:
+                    result["media_id"] = await save_avatar(self.settings, self.sessions, tenant.id, url)
+                except (PlatformError, OSError, ValueError):
+                    result["sync_error"] = "avatar_unavailable"
             await self.put_profile(tenant.id, kind, external_id, result)
             return result, not url or bool(result.get("media_id"))
         except PlatformError as exc:
@@ -177,12 +180,18 @@ class Worker:
             snapshot["group_owner_id"] = owner_id
             snapshot["group_owner_name"] = owner.name if owner else None
         # A current group list cannot identify a past departure by itself.
-        if "member_candidates" not in snapshot:
+        # Retain the original baseline across API failures and delayed group updates.
+        # Never replace it with a profile fetched after this event on a retry.
+        if "_before_members" not in snapshot and not existing:
+            snapshot["_before_members"] = (before.get("member_list") if previous
+                and previous.synced_at <= int(payload["CreateTime"]) * 1000 else None)
+        if not snapshot.get("member_candidates"):
             snapshot["member_candidates"] = []
             snapshot["member_evidence"] = "no_before_snapshot"
-            old_members, new_members = before.get("member_list"), current.get("member_list")
-            if (previous and previous.synced_at <= int(payload["CreateTime"]) * 1000
-                    and isinstance(old_members, list) and isinstance(new_members, list)):
+            old_members, new_members = snapshot.get("_before_members"), current.get("member_list")
+            if isinstance(old_members, list) and not isinstance(new_members, list):
+                snapshot["member_evidence"] = "current_snapshot_unavailable"
+            if isinstance(old_members, list) and isinstance(new_members, list):
                 old = {m["userid"]: m for m in old_members if m.get("userid")}
                 new = {m["userid"]: m for m in new_members if m.get("userid")}
                 removed = old.keys() - new.keys()
@@ -191,17 +200,29 @@ class Worker:
                 if len(removed) == count and not (new.keys() - old.keys()):
                     for member_id in sorted(removed):
                         member = old[member_id]
-                        kind = {1: "employee", 2: "customer"}.get(member.get("type"))
+                        member_type = str(member.get("type", ""))
+                        kind = {"1": "employee", "2": "customer"}.get(member_type)
                         profile = await self.cached(tenant.id, kind, member_id) if kind else None
                         data = profile.data if profile else {}
                         snapshot["member_candidates"].append({
-                            "name": data.get("name") or member.get("name") or None,
-                            "member_type": member.get("type"),
+                            "member_id": member_id,
+                            "name": data.get("name") or (profile.name if profile and profile.name != "未知" else None) or member.get("name") or None,
+                            "member_type": int(member_type) if member_type in ("1", "2") else None,
                             "customer_type": data.get("type") if kind == "customer" else None,
                             "gender": data.get("gender"), "company_name": data.get("corp_name"),
                             "media_id": data.get("media_id"),
                         })
                     snapshot["member_evidence"] = "snapshot_difference"
+        # Missing profile fields do not invalidate the member difference. Retry enrichment
+        # using retained IDs, without trying to infer the removed members again.
+        for member in snapshot.get("member_candidates", []):
+            kind = {1: "employee", 2: "customer"}.get(member.get("member_type"))
+            if kind and member.get("member_id") and not member.get("name"):
+                data, _ = await self.get_profile(tenant, kind, member["member_id"])
+                member["name"] = data.get("name") or member.get("name")
+                if kind == "customer":
+                    member.update(customer_type=data.get("type"), gender=data.get("gender"),
+                                  company_name=data.get("corp_name"), media_id=data.get("media_id"))
         return snapshot
 
     async def normalize(self, tenant, inbox, payload):
@@ -212,9 +233,12 @@ class Worker:
                      "del_follow_user": "contact_deleted"}
             if change not in types:
                 if change == "edit_external_contact":
-                    await self.get_profile(tenant, "customer", payload.get("ExternalUserID"), force=True)
+                    _, complete = await self.get_profile(tenant, "customer", payload.get("ExternalUserID"), force=True)
+                    return complete
                 return True
             employee_id, customer_id = payload.get("UserID"), payload.get("ExternalUserID")
+            if not employee_id or not customer_id:
+                raise PlatformError("contact_identity_fields_missing")
             employee, ok1 = await self.get_profile(tenant, "employee", employee_id)
             customer, ok2 = await self.get_profile(tenant, "customer", customer_id)
             relation = next((r for r in customer.get("follow_user", []) if r.get("userid") == employee_id), {})
@@ -226,9 +250,9 @@ class Worker:
                 "deletion_direction": direction, "add_way": str(relation["add_way"]) if "add_way" in relation else None,
                 "channel_state": payload.get("State"), "quantity": 1,
                 "enrichment_status": "complete" if ok1 and ok2 else "partial",
-                "snapshot": {"employee_name": employee.get("name", "未知员工"),
+                "snapshot": {"employee_name": employee.get("name") or employee_id,
                              "employee_media_id": employee.get("media_id"),
-                             "customer_name": customer.get("name", "未知客户"),
+                             "customer_name": customer.get("name") or customer_id,
                              "customer_media_id": customer.get("media_id"),
                              "customer_type": customer.get("type"), "gender": customer.get("gender"),
                              "company_name": customer.get("corp_name")},
@@ -242,7 +266,11 @@ class Worker:
                 raise PlatformError(",".join(reasons))
             return True
         if payload.get("Event") == "change_external_chat":
+            if change not in ("create", "update", "dismiss"):
+                return True
             chat_id = payload.get("ChatId")
+            if not chat_id:
+                raise PlatformError("group_chat_id_missing")
             previous = await self.cached(tenant.id, "group", chat_id)
             current = None
             group_error = None
@@ -250,18 +278,31 @@ class Worker:
                 current = await self.platforms.group(tenant, chat_id)
             except PlatformError as exc:
                 group_error = str(exc)
-            if payload.get("UpdateDetail") == "del_member":
-                quantity = max(1, int(payload.get("MemChangeCnt", "1")))
+            if change == "update" and payload.get("UpdateDetail") == "del_member":
+                try:
+                    quantity = int(payload["MemChangeCnt"])
+                    if quantity <= 0:
+                        raise ValueError()
+                except (KeyError, TypeError, ValueError):
+                    raise PlatformError("group_member_count_invalid") from None
                 snapshot = await self.group_snapshot(tenant, inbox, payload, previous, current)
+                members = snapshot.get("member_candidates", [])
+                details_complete = bool(snapshot.get("group_name") and members
+                    and all(m.get("name") and m.get("member_type") in (1, 2) for m in members))
                 await self.write_events(tenant.id, inbox.id, [{
                     "item_key": "group", "event_type": "group_change_unknown", "occurred_at": occurred,
                     "group_id": chat_id, "quantity": quantity, "resolution": "unresolved",
-                    "enrichment_status": "partial",
+                    "enrichment_status": "complete" if details_complete else "partial",
                     "snapshot": snapshot,
                 }])
             if current:
                 await self.put_profile(tenant.id, "group", chat_id, current)
             if group_error and change != "dismiss":
                 raise PlatformError(group_error)
+            if change == "update" and payload.get("UpdateDetail") == "del_member":
+                if snapshot.get("member_evidence") in ("current_snapshot_unavailable", "snapshot_difference_inconclusive"):
+                    raise PlatformError("group_snapshot_not_conclusive")
+                if any(not m.get("name") for m in snapshot.get("member_candidates", [])):
+                    raise PlatformError("group_member_profile_incomplete")
             return True
         return True

@@ -1,0 +1,10 @@
+{
+  "host": "your-server-ip-or-ssh-alias",
+  "user": "root",
+  "ssh_port": 22,
+  "remote_dir": "/root/workspace/wecom-monitor",
+  "identity_file": "",
+  "service": "",
+  "app_port": 8000,
+  "timeout": 90
+}

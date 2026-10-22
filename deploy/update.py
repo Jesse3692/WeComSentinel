@@ -20,6 +20,35 @@ class UpdateError(Exception):
     pass
 
 
+BUNDLE_PATHS = ("app", "migrations", "scripts", "frontend/dist", "pyproject.toml",
+                "uv.lock", "alembic.ini", ".python-version")
+
+
+def validate_bundle(bundle):
+    for name in BUNDLE_PATHS:
+        path = bundle / name
+        if not path.exists() or path.is_symlink():
+            raise UpdateError(f"发布包缺少有效路径：{name}")
+    if not (bundle / "frontend/dist/index.html").is_file():
+        raise UpdateError("发布包缺少前端 index.html")
+
+
+def install_bundle(bundle, backup):
+    """Replace only release paths; preserve environment, database and media."""
+    validate_bundle(bundle)
+    for name in BUNDLE_PATHS:
+        source, destination = bundle / name, ROOT / name
+        old = backup / "code" / name
+        if destination.exists() or destination.is_symlink():
+            old.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(destination), str(old))
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir():
+            shutil.copytree(source, destination)
+        else:
+            shutil.copy2(source, destination)
+
+
 def run(args, *, capture=False):
     result = subprocess.run([str(arg) for arg in args], cwd=ROOT, check=False,
                             text=True, stdout=subprocess.PIPE if capture else None)

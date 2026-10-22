@@ -230,6 +230,7 @@ async def test_group_snapshot_reuses_known_contact_details_as_unconfirmed_candid
         assert row.snapshot["group_owner_name"] == "群主姓名"
         assert row.snapshot["member_evidence"] == "snapshot_difference"
         assert row.snapshot["member_candidates"] == [{
+            "member_id": "customer1",
             "name": "已知客户", "member_type": 2, "customer_type": 1, "gender": 2,
             "company_name": "客户企业", "media_id": None,
         }]

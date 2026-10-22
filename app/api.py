@@ -79,9 +79,11 @@ def period(start_date=None, end_date=None, days=7):
 
 
 def event_dict(e):
-    return {k: getattr(e, k) for k in ("id", "tenant_id", "event_type", "employee_id", "customer_id",
+    result = {k: getattr(e, k) for k in ("id", "tenant_id", "event_type", "employee_id", "customer_id",
             "group_id", "operator_id", "deletion_direction", "occurred_at", "add_way", "channel_state",
             "quantity", "resolution", "enrichment_status", "snapshot")}
+    result["snapshot"] = {k: v for k, v in e.snapshot.items() if not k.startswith("_")}
+    return result
 
 
 async def event_details(db, rows):

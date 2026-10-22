@@ -15,3 +15,4 @@ frontend/dist/
 .history/
 .deploy/
 uvicorn.log*
+deploy/sync.local.json

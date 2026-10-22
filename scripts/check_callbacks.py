@@ -33,7 +33,9 @@ def safe_error(value):
         return None
     if value in {"tenant_disabled", "profile_incomplete", "wecom_secret_not_configured",
                  "platform_transport_error", "TimeoutError", "ValueError", "KeyError",
-                 "TypeError", "IntegrityError", "OperationalError"}:
+                 "TypeError", "IntegrityError", "OperationalError", "contact_identity_fields_missing",
+                 "group_chat_id_missing", "group_member_count_invalid", "group_snapshot_not_conclusive",
+                 "group_member_profile_incomplete", "avatar_unavailable"}:
         return value
     if re.fullmatch(r"platform_error_-?[0-9]{1,10}", value):
         return value

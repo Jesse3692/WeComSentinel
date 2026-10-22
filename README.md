@@ -10,6 +10,8 @@ Python + FastAPI + SQLite 后端，Vue 3 + TypeScript + ECharts 前端。支持�
 
 ## 本机快速启动
 
+源码部署后的日常更新可使用 [本地一键同步部署](docs/本地一键同步部署.md)：本地构建前端，SSH 上传并重启服务器、检查 `/readyz`。
+
 环境：uv、Python 3.12、Node.js 24、pnpm。uv 安装方法见 [官方文档](https://docs.astral.sh/uv/getting-started/installation/)。以下命令在项目根目录的 PowerShell 中执行；uv 会自动创建 `.venv`，无需手动激活。
 
 ```powershell
