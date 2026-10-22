@@ -200,7 +200,7 @@ async def test_group_does_not_invent_members_or_operator(system):
         assert row.resolution == "unresolved"
 
 
-async def test_group_snapshot_reuses_known_contact_details_as_unconfirmed_candidates(system):
+async def test_group_snapshot_classifies_known_external_contact_without_claiming_exact_attribution(system):
     app, client, _ = system
     stamp = now_ms() // 1000
     async with app.state.sessions() as db:
@@ -235,7 +235,7 @@ async def test_group_snapshot_reuses_known_contact_details_as_unconfirmed_candid
             "company_name": "客户企业", "media_id": None,
         }]
         assert row.customer_id is None and row.operator_id is None
-        assert row.event_type == "group_change_unknown" and row.resolution == "unresolved"
+        assert row.event_type == "group_removed" and row.resolution == "inferred"
         # A replay must not lose evidence after the group profile was updated.
         job = await db.scalar(select(Job))
         job.status, job.next_run_at = "retry", 0

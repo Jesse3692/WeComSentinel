@@ -6,7 +6,7 @@ import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/compon
 import { CanvasRenderer } from 'echarts/renderers'
 import { api, setCSRF } from './api'
 import Avatar from './Avatar.vue'
-import { hasMatchedMembers, memberStatus, memberNames, memberReason, groupEventLabel } from './groupEvidence'
+import { hasMatchedMembers, memberStatus, memberNames, memberReason, groupEventLabel, groupClassificationNote, groupEvidenceText } from './groupEvidence'
 echarts.use([LineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
 
 type AnyRow = Record<string, any>
@@ -21,7 +21,7 @@ const userForm = reactive({name: '', ding_corp_id: '', ding_user_id: ''})
 const chartEl = ref<HTMLElement | null>(null), sentinel = ref<HTMLElement | null>(null)
 let chart: echarts.ECharts | undefined, resize: ResizeObserver | undefined, observer: IntersectionObserver | undefined
 let version = 0, searchTimer: ReturnType<typeof setTimeout>, touchStart = 0, refreshTimer: ReturnType<typeof setInterval>
-const labels: Record<string, string> = {contact_added:'新增联系人', contact_deleted:'删除联系人', group_left:'主动退群', group_removed:'被移出群', group_change_unknown:'快照识别 / 待核实'}
+const labels: Record<string, string> = {contact_added:'新增联系人', contact_deleted:'删除联系人', group_left:'主动退群', group_removed:'被移出群', group_change_unknown:'其他 / 待核实'}
 const nav = [{id:'dashboard', name:'总览', symbol:'◫'}, {id:'added', name:'新增', symbol:'＋'}, {id:'deleted', name:'删除', symbol:'−'}, {id:'groups', name:'群变更', symbol:'◎'}, {id:'me', name:'我的', symbol:'◉'}]
 const colors = ['#206a58', '#cf7945', '#677cbb', '#bd6480']
 const types = ['contact_added','contact_deleted','group_left','group_removed']
@@ -33,14 +33,6 @@ const groupName = (row: AnyRow) => row.snapshot.group_name?.trim() || '未命名
 function eventLabel(row: AnyRow) {
   if (isGroupEvent(row)) return groupEventLabel(row)
   return labels[row.event_type]
-}
-function groupNote(row: AnyRow) {
-  const reported = row.snapshot.reported_event_type
-  const reason = ['group_left', 'group_removed'].includes(reported) ? labels[reported] : '群成员变更'
-  if (hasMatchedMembers(row)) {
-    return '统计口径：此记录单独展示，暂未计入已确认客户流失指标。'
-  }
-  return `平台报告${reason} ${row.quantity} 人次。具体成员身份、是否为外部客户及操作人尚未确认，暂不计入已确认客户退群或被移出指标。`
 }
 function query(extra: Record<string,string> = {}) {
   const p = new URLSearchParams({tenant_id: tenant.value, ...extra})
@@ -191,13 +183,14 @@ onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();observer?.disconnect(
         <div v-if="!dashboard && loading" class="empty">正在加载汇总…</div>
         <template v-if="dashboard">
           <div class="metrics"><button v-for="(card,i) in dashboard.cards" :key="card.type" class="metric" @click="cardClick(card.type)"><div class="metric-top"><span>{{labels[card.type]}}</span><span class="metric-symbol" :style="{color:colors[Number(i)]}">{{['↗','↘','↪','⊖'][Number(i)]}}</span></div><strong>{{card.value.toLocaleString()}}<small>人次</small></strong><div class="metric-footer"><span :class="card.delta>0?'up':card.delta<0?'down':'neutral'">{{card.delta>0?'↑ +':card.delta<0?'↓ ':''}}{{card.delta}}</span><span>较上一周期</span><span class="metric-arrow">↗</span></div></button></div>
-          <div v-if="dashboard.unresolved_count || dashboard.pending_jobs" class="notice">有 {{dashboard.unresolved_count}} 人次记录由快照识别或仍待核实，未计入已确认指标，{{dashboard.pending_jobs}} 个任务尚未完成。详情和指标可能继续补全。</div>
+          <div v-if="dashboard.unresolved_count || dashboard.pending_jobs" class="notice">有 {{dashboard.unresolved_count}} 人次属于其他群成员变更或仍待核实，未计入外部客户流失指标，{{dashboard.pending_jobs}} 个任务尚未完成。详情和指标可能继续补全。</div>
           <section class="panel trend-panel"><div class="panel-title"><div><h2>关系变化趋势</h2><p>按日查看四类事件，点击图例切换显示</p></div><span class="badge">{{dashboard.trend.length}} 天</span></div><div ref="chartEl" class="chart" aria-label="四类事件趋势图"></div><p class="chart-foot">统计区间 {{dashboard.range[0]}} 至 {{dashboard.range[1]}} · 截至 {{dateText(dashboard.updated_at)}}</p></section>
           <div class="rankings"><section v-for="(type,i) in ['contact_added','contact_deleted','group_left']" :key="type" class="panel"><div class="panel-title"><h2>{{['新增员工','删除关系员工','主动退群群聊'][i]}} <span class="top-label">TOP 5</span></h2><button class="text-btn" @click="cardClick(type)">明细 ↗</button></div><div v-if="!dashboard.tops[type].length" class="empty small">暂无数据</div><div v-for="(r,index) in dashboard.tops[type]" :key="r.tenant_id+':'+r.id" class="rank-row"><span class="rank-number" :class="{first:index===0}">{{String(Number(index)+1).padStart(2,'0')}}</span><div class="rank-name">{{r.name}}<small>{{tenantName(r.tenant_id)}}</small><div class="rank-bar"><i :style="{width:(r.count/dashboard.tops[type][0].count*100)+'%',background:colors[Number(i)]}"></i></div></div><strong>{{r.count}}<small>人次</small></strong></div></section></div>
         </template>
       </template>
       <template v-else-if="['added','deleted','groups'].includes(tab)">
         <section class="detail-toolbar"><div v-if="tab==='groups'" class="tabs"><button v-for="t in ['group_left','group_removed','group_change_unknown']" :class="{selected:groupType===t}" @click="groupType=t">{{labels[t]}}</button></div><label v-else>员工<select v-model="employee"><option value="">全部员工</option><option v-for="e in employees" :key="e.tenant_id+':'+e.id" :value="JSON.stringify([e.tenant_id,e.id])">{{e.name}} · {{tenantName(e.tenant_id)}}</option></select></label><label v-if="tab==='added'">添加方式<select v-model="addWay"><option value="">全部方式</option><option value="1">扫描二维码</option><option value="2">搜索手机号</option><option value="3">名片分享</option><option value="4">群聊添加</option><option value="5">手机通讯录</option><option value="6">微信联系人</option><option value="other">其他</option><option value="unknown">未知</option></select></label><input v-if="tab==='groups'" v-model="groupSearch" placeholder="搜索群名称" aria-label="群名称搜索"><span class="muted">{{totals.records}} 条记录 · {{totals.quantity}} 人次</span></section>
+        <p v-if="tab==='groups' && groupType==='group_change_unknown'" class="muted">这里保留内部员工变更，以及客户身份或退出原因证据不足的记录。已识别的外部客户按主动退群、被移出群分类。</p>
         <section class="panel event-list"><div v-if="!records.length" class="empty"><span>◎</span><h3>{{loading?'正在加载…':'暂无数据'}}</h3><p>调整主体或日期范围后再试</p></div><button v-for="e in records" :key="e.id" class="event-row" @click="detail=e"><Avatar :name="e.snapshot.customer_name" :media-id="e.snapshot.customer_media_id" :warm="tab==='deleted'" /><div class="event-content"><strong>{{isGroupEvent(e) ? groupName(e) : memberNames(e)}} <span v-if="e.quantity>1" class="badge">{{e.quantity}} 人次</span></strong><p v-if="e.event_type==='contact_added'">由 {{e.snapshot.employee_name}} 添加 · {{addWayLabel(e.add_way)}}</p><p v-else-if="e.event_type==='contact_deleted'">{{e.deletion_direction==='customer_deleted_employee'?'客户删除了员工':e.deletion_direction==='employee_deleted_customer'?'员工删除了客户':'删除方向未提供'}} · {{e.snapshot.employee_name}}</p><p v-else>{{eventLabel(e)}} · {{groupName(e)}}<span v-if="e.operator_id"> · 操作人 {{e.operator_id}}</span></p><small>{{tenantName(e.tenant_id)}}<span v-if="e.resolution!=='exact'"> · {{memberStatus(e)}}</span><span v-if="e.enrichment_status!=='complete'"> · 资料待补全</span><span v-if="e.channel_state"> · 渠道 {{e.channel_state}}</span></small></div><time>{{dateText(e.occurred_at)}}</time><span class="muted">›</span></button></section>
         <div ref="sentinel" class="load-more"><button v-if="nextCursor" class="secondary" :disabled="loading" @click="loadMore">{{loading?'加载中…':'加载更多'}}</button><span v-else-if="records.length">已显示全部记录</span></div>
       </template>
@@ -220,9 +213,10 @@ onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();observer?.disconnect(
           <template v-if="isGroupEvent(detail)">
             <dt>{{detail.snapshot.group_name_source==='current_profile'?'群名称（当前）':'群名称'}}</dt><dd>{{groupName(detail)}}</dd>
             <dt>变更类型</dt><dd>{{eventLabel(detail)}}</dd>
-            <dt>变更人数</dt><dd>{{detail.quantity}} 人次</dd>
+            <dt>{{detail.event_type==='group_change_unknown'?'本条涉及人数':'本条客户人数'}}</dt><dd>{{detail.quantity}} 人次</dd>
+            <dt v-if="detail.snapshot.reported_quantity && detail.snapshot.reported_quantity!==detail.quantity">同次平台报告人数</dt><dd v-if="detail.snapshot.reported_quantity && detail.snapshot.reported_quantity!==detail.quantity">{{detail.snapshot.reported_quantity}} 人次（含本条之外的成员）</dd>
             <dt>涉及成员</dt><dd>{{memberNames(detail)}}</dd>
-            <dt v-if="hasMatchedMembers(detail)">识别依据</dt><dd v-if="hasMatchedMembers(detail)">根据变更前后成员列表比对识别，人数与平台报告一致；成员关联为系统推断。</dd>
+            <dt>识别依据</dt><dd>{{groupEvidenceText(detail)}}</dd>
             <dt v-if="detail.snapshot.group_owner_id">群主（非操作人）</dt><dd v-if="detail.snapshot.group_owner_id">{{detail.snapshot.group_owner_name || detail.snapshot.group_owner_id}}</dd>
             <dt>操作人</dt><dd>{{detail.operator_id || '平台未提供'}}</dd>
           </template>
@@ -250,7 +244,7 @@ onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();observer?.disconnect(
           </dl>
         </template>
         <p v-else-if="detail.event_type==='group_change_unknown'" class="muted">{{memberReason(detail)}}</p>
-        <p v-if="detail.event_type==='group_change_unknown'" :class="hasMatchedMembers(detail)?'muted':'notice'">{{groupNote(detail)}}</p>
+        <p v-if="isGroupEvent(detail)" :class="detail.event_type==='group_change_unknown' && !hasMatchedMembers(detail)?'notice':'muted'">{{groupClassificationNote(detail)}}</p>
         <p v-else-if="detail.snapshot.note" class="notice">{{detail.snapshot.note}}</p>
         <p v-if="detail.snapshot.demo" class="notice">此条为模拟演示数据。</p>
       </section>

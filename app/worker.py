@@ -5,10 +5,11 @@ import logging
 import random
 
 from cryptography.fernet import Fernet
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from .media import save_avatar
+from .event_classification import group_records
 from .models import BusinessEvent, Inbox, Job, Profile, Tenant, now_ms
 from .platforms import PlatformError
 
@@ -144,7 +145,7 @@ class Worker:
                 return {**cached.data, "sync_error": str(exc)}, complete
             return {"sync_error": str(exc)}, False
 
-    async def write_events(self, tenant_id, callback_id, records):
+    async def write_events(self, tenant_id, callback_id, records, replace_group=False):
         async with self.sessions() as db:
             for record in records:
                 item = await db.scalar(select(BusinessEvent).where(BusinessEvent.tenant_id == tenant_id,
@@ -156,10 +157,15 @@ class Worker:
                 else:
                     for key, value in record.items():
                         setattr(item, key, value)
+            if replace_group:
+                await db.execute(delete(BusinessEvent).where(
+                    BusinessEvent.tenant_id == tenant_id, BusinessEvent.callback_id == callback_id,
+                    BusinessEvent.item_key.in_(["group", "group_other"]),
+                    BusinessEvent.item_key.not_in([record["item_key"] for record in records])))
             await db.commit()
 
     async def group_snapshot(self, tenant, inbox, payload, previous, current):
-        """Use available profiles; snapshot differences remain candidates, never exact events."""
+        """Retain snapshot evidence independently of the customer business category."""
         before = previous.data if previous else {}
         current = current or {}
         async with self.sessions() as db:
@@ -167,13 +173,14 @@ class Worker:
                 BusinessEvent.tenant_id == tenant.id, BusinessEvent.callback_id == inbox.id,
                 BusinessEvent.item_key == "group"))
             snapshot = dict(existing.snapshot) if existing else {}
+        if "_all_member_candidates" in snapshot:
+            snapshot["member_candidates"] = snapshot.pop("_all_member_candidates")
         name = current.get("name") or before.get("name") or snapshot.get("group_name")
         snapshot["group_name"] = name or None
         snapshot["group_name_source"] = (
             "group_details" if current.get("name") else "cached" if name else "not_provided")
         snapshot["reported_event_type"] = {"0": "group_left", "1": "group_removed"}.get(
             str(payload.get("QuitScene")), "group_change_unknown")
-        snapshot["note"] = "平台提供了变更原因和人数；快照差异中的成员仅为待核实线索，不计入已确认客户退群或被踢指标。"
         owner_id = current.get("owner") or before.get("owner")
         if owner_id:
             owner = await self.cached(tenant.id, "employee", owner_id)
@@ -286,15 +293,8 @@ class Worker:
                 except (KeyError, TypeError, ValueError):
                     raise PlatformError("group_member_count_invalid") from None
                 snapshot = await self.group_snapshot(tenant, inbox, payload, previous, current)
-                members = snapshot.get("member_candidates", [])
-                details_complete = bool(snapshot.get("group_name") and members
-                    and all(m.get("name") and m.get("member_type") in (1, 2) for m in members))
-                await self.write_events(tenant.id, inbox.id, [{
-                    "item_key": "group", "event_type": "group_change_unknown", "occurred_at": occurred,
-                    "group_id": chat_id, "quantity": quantity, "resolution": "unresolved",
-                    "enrichment_status": "complete" if details_complete else "partial",
-                    "snapshot": snapshot,
-                }])
+                await self.write_events(tenant.id, inbox.id,
+                    group_records(snapshot, quantity, occurred, chat_id), replace_group=True)
             if current:
                 await self.put_profile(tenant.id, "group", chat_id, current)
             if group_error and change != "dismiss":

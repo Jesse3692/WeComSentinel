@@ -236,7 +236,7 @@ async def dashboard(tenant_id: str = "all", start_date: date | None = None, end_
         tops[t] = [{"tenant_id": tid, "id": eid, "name": name or eid, "count": n} for tid, eid, name, n in rows]
     unresolved = await db.scalar(select(func.coalesce(func.sum(BusinessEvent.quantity), 0)).where(
         base, BusinessEvent.occurred_at >= start, BusinessEvent.occurred_at < end,
-        BusinessEvent.resolution != "exact"))
+        BusinessEvent.event_type == "group_change_unknown"))
     pending = await db.scalar(select(func.count()).select_from(Job).where(Job.tenant_id.in_(ids), Job.status != "done"))
     return result({"cards": [{"type": t, "value": current.get(t, 0), "delta": current.get(t, 0) - previous.get(t, 0)} for t in TYPES],
                    "trend": trend, "tops": tops, "unresolved_count": unresolved, "pending_jobs": pending,
