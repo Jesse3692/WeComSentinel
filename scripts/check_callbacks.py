@@ -13,15 +13,19 @@ from app.config import Settings
 
 
 def event_fields(payload):
-    allowed = {
-        "Event": {"change_external_chat", "change_external_contact"},
-        "ChangeType": {"create", "update", "dismiss", "add_external_contact",
-                       "edit_external_contact", "del_external_contact", "del_follow_user"},
-        "UpdateDetail": {"add_member", "del_member", "change_owner", "change_name", "change_notice"},
-        "QuitScene": {"0", "1"},
-    }
-    return {key: str(payload.get(key, "")) if str(payload.get(key, "")) in values else "unknown"
-            for key, values in allowed.items()}
+    # Show protocol identifiers even for events the worker does not support.
+    # Never output arbitrary content, IDs, messages, or the complete payload.
+    fields = {}
+    for key in ("MsgType", "Event", "ChangeType", "UpdateDetail", "QuitScene"):
+        value = payload.get(key)
+        if value is None or value == "":
+            fields[key] = "missing"
+        elif isinstance(value, (str, int)) and re.fullmatch(r"[A-Za-z0-9_]{1,80}", str(value)):
+            fields[key] = str(value)
+        else:
+            fields[key] = "redacted"
+    fields["has_chat_id"] = bool(payload.get("ChatId"))
+    return fields
 
 
 def safe_error(value):
@@ -73,10 +77,17 @@ def inspect_callbacks(settings, limit=10):
             }
             try:
                 payload = json.loads(cipher.decrypt(row["payload_encrypted"]))
+                if not isinstance(payload, dict):
+                    raise ValueError("Expected an object")
                 item.update(event_fields(payload))
-                item["event_time"] = stamp(int(payload.get("CreateTime")) * 1000)
             except Exception:
                 item["payload_check"] = "decrypt_or_parse_failed"
+            else:
+                item["payload_check"] = "parsed"
+                try:
+                    item["event_time"] = stamp(int(payload.get("CreateTime")) * 1000)
+                except (TypeError, ValueError, OverflowError):
+                    item["event_time"] = "missing_or_invalid"
             events = db.execute(
                 "SELECT event_type, occurred_at FROM business_events WHERE callback_id=? ORDER BY id",
                 (row["id"],),

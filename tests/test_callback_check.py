@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from cryptography.fernet import Fernet
 
-from scripts.check_callbacks import inspect_callbacks, safe_error
+from scripts.check_callbacks import event_fields, inspect_callbacks, safe_error
 
 
 def test_callback_report_is_read_only_and_omits_private_payload(tmp_path):
@@ -44,3 +44,15 @@ def test_callback_report_is_read_only_and_omits_private_payload(tmp_path):
 def test_errors_are_redacted():
     assert safe_error("platform_error_48002") == "platform_error_48002"
     assert safe_error("https://example.com?access_token=private") == "other_error_redacted"
+
+
+def test_unsupported_event_identifiers_are_visible_without_other_payload_fields():
+    fields = event_fields({
+        "MsgType": "event", "Event": "change_contact", "ChangeType": "delete_user",
+        "ChatId": "private-chat", "Content": "private-message", "UserID": "private-user",
+    })
+    assert fields["Event"] == "change_contact"
+    assert fields["ChangeType"] == "delete_user"
+    assert fields["UpdateDetail"] == "missing" and fields["has_chat_id"]
+    assert "private-" not in json.dumps(fields)
+    assert event_fields({"Event": "https://example.com?token=secret"})["Event"] == "redacted"
