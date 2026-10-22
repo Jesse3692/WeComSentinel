@@ -1,4 +1,6 @@
 import asyncio
+import logging
+import re
 import time
 
 import httpx
@@ -26,6 +28,28 @@ class Platforms:
         except (httpx.HTTPError, ValueError) as exc:
             raise PlatformError("platform_transport_error") from exc
         if data.get("errcode", 0) != 0:
+            # Only log fixed operation names and numeric codes. Platform messages
+            # can contain access tokens, login codes and personal information.
+            operation = {
+                "https://api.dingtalk.com/v1.0/oauth2/accessToken": "application_token",
+                "https://oapi.dingtalk.com/topapi/v2/user/getuserinfo": "login_identity",
+                "https://oapi.dingtalk.com/topapi/v2/user/get": "user_details",
+            }.get(url)
+            if operation:
+                def numeric_code(value):
+                    value = str(value)
+                    return value if re.fullmatch(r"-?[0-9]{1,10}", value) else "unavailable"
+
+                code = numeric_code(data["errcode"])
+                subcode = numeric_code(data.get("sub_code"))
+                logging.getLogger(__name__).warning(
+                    "dingtalk_api_error operation=%s code=%s subcode=%s",
+                    operation, code, subcode,
+                )
+                message = f"platform_error_{code}"
+                if subcode != "unavailable":
+                    message += f"_subcode_{subcode}"
+                raise PlatformError(message)
             raise PlatformError(f"platform_error_{data['errcode']}")
         return data
 

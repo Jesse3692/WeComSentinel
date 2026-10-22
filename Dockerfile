@@ -7,10 +7,13 @@ COPY frontend/ ./
 RUN pnpm run build
 
 FROM python:3.12-slim
-ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+COPY --from=ghcr.io/astral-sh/uv:0.13.4 /uv /uvx /bin/
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
+    UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never \
+    PATH="/app/.venv/bin:$PATH"
 WORKDIR /app
-COPY requirements.lock ./
-RUN pip install --no-cache-dir -r requirements.lock && useradd -m appuser
+COPY pyproject.toml uv.lock ./
+RUN uv sync --locked --no-dev --no-install-project --no-cache && useradd -m appuser
 COPY app/ app/
 COPY migrations/ migrations/
 COPY alembic.ini ./

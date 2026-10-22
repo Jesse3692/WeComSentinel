@@ -56,7 +56,9 @@ async def check(config, client, auth_code=None):
             return None
         code = data.get("errcode", data.get("code"))
         if response.is_error or code not in (None, 0, "0"):
-            add(name, "fail", f"HTTP {response.status_code}，平台错误码：{safe_code(code)}。请在钉钉后台核对凭据、接口权限及调用限制。")
+            subcode = data.get("sub_code")
+            detail = f"，子错误码：{safe_code(subcode)}" if subcode is not None else ""
+            add(name, "fail", f"HTTP {response.status_code}，平台错误码：{safe_code(code)}{detail}。请在钉钉后台核对凭据、接口权限及调用限制。")
             return None
         return data
 

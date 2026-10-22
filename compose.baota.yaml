@@ -1,0 +1,32 @@
+# Standalone configuration: use docker compose -f compose.baota.yaml ...
+# BaoTa's host Nginx terminates HTTPS and proxies to 127.0.0.1:8000.
+services:
+  app:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: sqlite+aiosqlite:////app/data/monitor.db
+      MEDIA_DIR: /app/data/media
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - app_data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=5).close()"
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  app_data:

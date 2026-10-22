@@ -44,6 +44,18 @@ async def test_missing_token_is_not_success():
     assert report["status"] == "failed"
 
 
+async def test_subcode_is_reported_without_platform_message():
+    def handler(request):
+        return httpx.Response(200, json={
+            "errcode": 88, "sub_code": "60011", "sub_msg": "test-secret private-token",
+        })
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        report = await check(CONFIG, client)
+    text = json.dumps(report, ensure_ascii=False)
+    assert "60011" in text and "子错误码" in text
+    assert "test-secret" not in text and "private-token" not in text
+
+
 async def test_optional_login_checks_identity_and_details_without_pii():
     def handler(request):
         if request.url.path.endswith("accessToken"):

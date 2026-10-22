@@ -1,0 +1,25 @@
+[Unit]
+Description=WeCom customer monitor
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=www
+Group=www
+WorkingDirectory=/www/projects/wecom-monitor
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+# Application settings are read from WorkingDirectory/.env by Python.
+ExecStartPre=/www/projects/wecom-monitor/.venv/bin/python -m alembic upgrade head
+ExecStart=/www/projects/wecom-monitor/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=120
+TimeoutStopSec=30
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
