@@ -6,7 +6,6 @@ import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/compon
 import { CanvasRenderer } from 'echarts/renderers'
 import { api, setCSRF, invalidateSession, sessionGeneration } from './api'
 import Avatar from './Avatar.vue'
-import NavIcon from './NavIcon.vue'
 import { eventColor, chartColors, themeColor } from './theme/chart'
 import { hasMatchedMembers, memberStatus, memberNames, memberReason, groupEventLabel, groupClassificationNote, groupEvidenceText } from './groupEvidence'
 echarts.use([LineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
@@ -27,7 +26,7 @@ const chartEl = ref<HTMLElement | null>(null), sentinel = ref<HTMLElement | null
 let chart: echarts.ECharts | undefined, resize: ResizeObserver | undefined, observer: IntersectionObserver | undefined
 let version = 0, searchTimer: ReturnType<typeof setTimeout>, touchStart = 0, refreshTimer: ReturnType<typeof setInterval>
 const labels: Record<string, string> = {contact_added:'新增联系人', contact_deleted:'删除联系人', group_left:'主动退群', group_removed:'被移出群', group_change_unknown:'其他 / 待核实'}
-const nav = [{id:'dashboard', name:'汇总'}, {id:'added', name:'新增'}, {id:'deleted', name:'删除'}, {id:'groups', name:'群变更'}, {id:'me', name:'我的'}]
+const nav = [{id:'dashboard', name:'总览', symbol:'◫'}, {id:'added', name:'新增', symbol:'＋'}, {id:'deleted', name:'删除', symbol:'−'}, {id:'groups', name:'群变更', symbol:'◎'}, {id:'me', name:'我的', symbol:'◉'}]
 const colors = chartColors()
 const types = ['contact_added','contact_deleted','group_left','group_removed']
 const addWayLabel = (value: string | null) => ({'1':'扫描二维码','2':'搜索手机号','3':'名片分享','4':'群聊添加','5':'手机通讯录','6':'微信联系人'}[value || ''] || (value?'其他方式':'方式未知'))
@@ -266,7 +265,7 @@ onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();observer?.disconnect(
     <aside class="sidebar">
       <div class="brand"><span class="brandmark">◫</span><div>关系观察台<small>CLIENT INSIGHT</small></div></div>
       <p class="nav-label">工作空间</p>
-      <nav><button v-for="n in nav" :key="n.id" :class="{active:tab===n.id}" @click="tab=n.id"><NavIcon :name="n.id" />{{n.name}}<i v-if="tab===n.id">●</i></button></nav>
+      <nav><button v-for="n in nav" :key="n.id" :class="{active:tab===n.id}" @click="tab=n.id"><span>{{n.symbol}}</span>{{n.name}}<i v-if="tab===n.id">●</i></button></nav>
       <button v-if="me.role==='admin'" class="admin-nav" :class="{active:tab==='admin'}" @click="tab='admin'">⚙ 主体与权限管理</button>
       <div class="sidebar-bottom"><Avatar :name="me.name" :url="me.avatar_url" /><div>{{me.name}}<small>{{me.role==='admin'?'管理员':'授权用户'}}</small></div><button class="text-btn" @click="logout" title="退出登录">↗</button></div>
     </aside>
@@ -303,7 +302,7 @@ onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();observer?.disconnect(
       </template>
       <footer class="page-footer">关系观察台 <span>数据按北京时间统计 · 每 30 秒更新总览</span></footer>
     </main>
-    <nav class="mobile-nav"><button v-for="n in nav" :key="n.id" :class="{active:tab===n.id}" @click="tab=n.id"><NavIcon :name="n.id" />{{n.name}}</button></nav>
+    <nav class="mobile-nav"><button v-for="n in nav" :class="{active:tab===n.id}" @click="tab=n.id"><span>{{n.symbol}}</span>{{n.name}}</button></nav>
     <div v-if="detail" class="modal-backdrop" @click.self="detail=null">
       <section ref="dialogEl" class="modal" tabindex="-1" @keydown="dialogKey" role="dialog" aria-modal="true" aria-label="事件详情">
         <button class="close" @click="detail=null" aria-label="关闭">×</button>
