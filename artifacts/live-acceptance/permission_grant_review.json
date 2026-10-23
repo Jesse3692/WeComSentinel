@@ -1,0 +1,2 @@
+{"non_demo_users": [{"role": "admin", "enabled": true, "corp_matches_config": true, "corp_matches_real_admin": true, "grant_count": 0, "only_real_test_tenant": false}, {"role": "user", "enabled": true, "corp_matches_config": false, "corp_matches_real_admin": false, "grant_count": 1, "only_real_test_tenant": true}]}
+

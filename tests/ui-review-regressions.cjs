@@ -67,6 +67,8 @@ console.log('PASS profile refresh updates name/tenants, revoked selection falls 
 profileMode='original';delayMe=500;meStarted=false;
 await page.getByRole('button',{name:'刷新数据',exact:false}).click();
 while(!meStarted)await page.waitForTimeout(10);
+// Navigation reloads access context. Only the old pending response is stale.
+profileMode='updated';
 await nav.locator('button').first().click();await page.waitForTimeout(700);
 assert.ok((await page.locator('.sidebar-bottom').innerText()).includes('刷新后的用户'),'late profile ignored after switching page');
 profileMode='updated';delayMe=0;await nav.locator('button').nth(4).click();await page.waitForTimeout(200);

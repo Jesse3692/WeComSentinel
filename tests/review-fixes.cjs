@@ -31,10 +31,10 @@ await page.route('**/api/v1/**',async route=>{
 await page.setViewportSize({width:390,height:844});paginate=true;
 await page.goto('http://localhost:8000');await page.locator('.metric').first().waitFor();
 await page.locator('.metric').first().click();await page.locator('.event-row').first().waitFor();
-await page.locator('.load-more').scrollIntoViewIfNeeded();
+await page.getByRole('button',{name:'下一页',exact:true}).click();
 await page.waitForFunction(()=>!document.querySelector('.loading-status'));
 await page.waitForTimeout(200);assert.equal(pageStarted,true);
-console.log('PASS: bottom pagination proceeds independently of slow employee options');
+console.log('PASS: explicit next page proceeds independently of slow employee options');
 await page.setViewportSize({width:1440,height:1000});
 await page.locator('.admin-nav').click();await page.getByPlaceholder('主体名称',{exact:true}).fill('上次会话未提交主体');
 await page.getByPlaceholder('用户姓名',{exact:true}).fill('上次用户草稿');await page.getByTitle('退出登录').click();await page.locator('.login-shell').waitFor();

@@ -51,7 +51,7 @@ async def administrator(user=Depends(identity)):
     return user
 
 
-async def allowed(db, user, tenant_id="all"):
+async def allowed(db, user, tenant_id="all", *, allow_empty=False):
     query = select(Tenant.id).where(Tenant.enabled.is_(True))
     if user.role != "admin":
         query = query.join(Grant, Grant.tenant_id == Tenant.id).where(Grant.user_id == user.id)
@@ -64,6 +64,8 @@ async def allowed(db, user, tenant_id="all"):
         if selected not in ids:
             raise HTTPException(403, "无该主体访问权限")
         return [selected]
+    if not ids and not allow_empty:
+        raise HTTPException(403, "无访问权限，请联系管理员")
     return ids
 
 
@@ -173,7 +175,7 @@ async def logout(request: Request, response: Response, user=Depends(identity), d
 
 @router.get("/api/v1/me")
 async def me(request: Request, user=Depends(identity), db=Depends(database)):
-    ids = await allowed(db, user)
+    ids = await allowed(db, user, allow_empty=True)
     tenants = (await db.scalars(select(Tenant).where(Tenant.id.in_(ids)))).all()
     return result({"id": user.id, "name": user.name, "avatar_url": user.avatar_url, "role": user.role,
                    "last_tenant_id": user.last_tenant_id if user.last_tenant_id in ids else None,
@@ -250,6 +252,7 @@ async def dashboard(tenant_id: str = "all", start_date: date | None = None, end_
 async def events(request: Request, tenant_id: str = "all", start_date: date | None = None,
                  end_date: date | None = None, event_type: str | None = None, employee_id: str | None = None,
                  employee_tenant_id: int | None = None,
+                 employee_keyword: str = Query("", max_length=100),
                  add_way: str | None = None, group_keyword: str | None = Query(None, max_length=100),
                  cursor: str | None = Query(None, max_length=4096), limit: int = Query(20, ge=1, le=100),
                  user=Depends(identity), db=Depends(database)):
@@ -262,15 +265,27 @@ async def events(request: Request, tenant_id: str = "all", start_date: date | No
         filters.append(BusinessEvent.event_type == event_type)
     if employee_id:
         filters.append(BusinessEvent.employee_id == employee_id)
+    employee_keyword = employee_keyword.strip()
+    if employee_keyword:
+        keyword = employee_keyword.lower()
+        matching_profile = select(Profile.id).where(
+            Profile.tenant_id == BusinessEvent.tenant_id, Profile.kind == "employee",
+            Profile.external_id == BusinessEvent.employee_id,
+            func.instr(func.lower(Profile.name), keyword) > 0).correlate(BusinessEvent).exists()
+        filters.append(or_(
+            func.instr(func.lower(BusinessEvent.employee_id), keyword) > 0,
+            func.instr(func.lower(func.coalesce(func.json_extract(
+                BusinessEvent.snapshot, "$.employee_name"), "")), keyword) > 0,
+            matching_profile))
     if employee_tenant_id is not None:
         if employee_tenant_id not in ids:
             raise HTTPException(403, "无该员工所属主体权限")
         filters.append(BusinessEvent.tenant_id == employee_tenant_id)
     if add_way:
         if add_way == "other":
-            filters.append(BusinessEvent.add_way.not_in(["1", "2", "3", "4", "5", "6"]))
+            filters.append(BusinessEvent.add_way.not_in(["0", "1", "2", "3", "4", "5", "6"]))
         elif add_way == "unknown":
-            filters.append(BusinessEvent.add_way.is_(None))
+            filters.append(or_(BusinessEvent.add_way.is_(None), BusinessEvent.add_way == "0"))
         else:
             filters.append(BusinessEvent.add_way == add_way)
     if group_keyword:
@@ -280,7 +295,8 @@ async def events(request: Request, tenant_id: str = "all", start_date: date | No
         effective_name = func.coalesce(func.nullif(func.json_extract(
             BusinessEvent.snapshot, "$.group_name"), ""), current_name)
         filters.append(func.instr(effective_name, group_keyword) > 0)
-    fingerprint = digest(json.dumps([ids, start, end, event_type, employee_id, employee_tenant_id, add_way, group_keyword, user.id]))
+    fingerprint = digest(json.dumps([ids, start, end, event_type, employee_id, employee_tenant_id,
+                                     employee_keyword, add_way, group_keyword, user.id]))
     upper = await db.scalar(select(func.coalesce(func.max(BusinessEvent.id), 0)))
     page_filter = []
     if cursor:
@@ -289,8 +305,9 @@ async def events(request: Request, tenant_id: str = "all", start_date: date | No
             if decoded["filter"] != fingerprint:
                 raise ValueError()
             upper = decoded["upper"]
-            page_filter.append(or_(BusinessEvent.occurred_at < decoded["time"],
-                               and_(BusinessEvent.occurred_at == decoded["time"], BusinessEvent.id < decoded["id"])))
+            if decoded["time"] is not None:
+                page_filter.append(or_(BusinessEvent.occurred_at < decoded["time"],
+                                   and_(BusinessEvent.occurred_at == decoded["time"], BusinessEvent.id < decoded["id"])))
         except (ValueError, KeyError, TypeError):
             raise HTTPException(422, "分页游标已失效，请刷新")
     filters.append(BusinessEvent.id <= upper)
@@ -302,14 +319,16 @@ async def events(request: Request, tenant_id: str = "all", start_date: date | No
         last_row = rows[limit - 1]
         next_cursor = encode_cursor({"upper": upper, "filter": fingerprint, "time": last_row.occurred_at, "id": last_row.id},
                                     request.app.state.settings.secret_key)
-    return result({"items": await event_details(db, rows[:limit]), "next_cursor": next_cursor,
+    page_cursor = cursor or encode_cursor({"upper": upper, "filter": fingerprint, "time": None, "id": None},
+                                         request.app.state.settings.secret_key)
+    return result({"items": await event_details(db, rows[:limit]), "next_cursor": next_cursor, "page_cursor": page_cursor,
                    "total_records": total, "total_quantity": quantity,
                    "range": [first.isoformat(), last.isoformat()]})
 
 
 @router.get("/api/v1/events/{event_id}")
 async def event_detail(event_id: int, user=Depends(identity), db=Depends(database)):
-    ids = await allowed(db, user)
+    ids = await allowed(db, user, allow_empty=True)
     row = await db.scalar(select(BusinessEvent).where(BusinessEvent.id == event_id, BusinessEvent.tenant_id.in_(ids)))
     if not row:
         raise HTTPException(404, "记录不存在")
@@ -346,7 +365,7 @@ async def options(request: Request, tenant_id: str = "all", keyword: str = Query
 
 @router.get("/api/v1/media/{media_id}")
 async def media(media_id: int, request: Request, user=Depends(identity), db=Depends(database)):
-    ids = await allowed(db, user)
+    ids = await allowed(db, user, allow_empty=True)
     row = await db.scalar(select(Media).where(Media.id == media_id, Media.tenant_id.in_(ids)))
     if not row:
         raise HTTPException(404, "图片不存在")

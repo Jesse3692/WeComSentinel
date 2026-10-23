@@ -1,0 +1,2 @@
+{"mode": "read-only SQL baseline on actual production events; not client API performance test", "statistics": [{"tenant_id": 3, "range": ["2026-10-17", "2026-10-23"], "metrics": {"contact_added": 3, "contact_deleted": 1, "group_left": 2, "group_removed": 4}, "daily_totals": {"contact_added": 3, "contact_deleted": 1, "group_left": 2, "group_removed": 4}, "metrics_equal_daily_totals": true, "top_counts_only": {"contact_added": [3], "contact_deleted": [1], "group_left": [1, 1]}, "real_page_sample": {"records": 19, "max_records_per_event_type": 9, "unique_ids": true}}]}
+

@@ -1,0 +1,141 @@
+diff --git a/frontend/src/App.vue b/frontend/src/App.vue
+index cc50d5f..4252f1d 100644
+--- a/frontend/src/App.vue
++++ b/frontend/src/App.vue
+@@ -1,21 +1,17 @@
+ <script setup lang="ts">
+-import { ref, reactive, watch, provide, onMounted, onBeforeUnmount, nextTick } from 'vue'
++import { ref, reactive, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+ import * as echarts from 'echarts/core'
+ import { LineChart } from 'echarts/charts'
+ import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
+ import { CanvasRenderer } from 'echarts/renderers'
+ import { api, setCSRF, invalidateSession, sessionGeneration } from './api'
+ import Avatar from './Avatar.vue'
+-import NavIcon from './NavIcon.vue'
+-import { avatarRetryKey } from './avatarRetry'
+ import { eventColor, chartColors, themeColor } from './theme/chart'
+ import { hasMatchedMembers, memberStatus, memberNames, memberReason, groupEventLabel, groupClassificationNote, groupEvidenceText } from './groupEvidence'
+ echarts.use([LineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
+ 
+ type AnyRow = Record<string, any>
+ const config = ref<AnyRow>({}), me = ref<AnyRow | null>(null), tab = ref('dashboard')
+-const avatarRetry = ref(0)
+-provide(avatarRetryKey, avatarRetry)
+ const logoutPending = ref(false), pageError = ref(''), effectiveRange = ref<string[]>([])
+ const employeeKeyword = ref(''), employeeOffset = ref(0), employeeMore = ref(false)
+ let employeeVersion = 0
+@@ -30,7 +26,7 @@ const chartEl = ref<HTMLElement | null>(null), sentinel = ref<HTMLElement | null
+ let chart: echarts.ECharts | undefined, resize: ResizeObserver | undefined, observer: IntersectionObserver | undefined
+ let version = 0, searchTimer: ReturnType<typeof setTimeout>, touchStart = 0, refreshTimer: ReturnType<typeof setInterval>
+ const labels: Record<string, string> = {contact_added:'新增联系人', contact_deleted:'删除联系人', group_left:'主动退群', group_removed:'被移出群', group_change_unknown:'其他 / 待核实'}
+-const nav = [{id:'dashboard', name:'汇总'}, {id:'added', name:'新增'}, {id:'deleted', name:'删除'}, {id:'groups', name:'群变更'}, {id:'me', name:'我的'}]
++const nav = [{id:'dashboard', name:'总览', symbol:'◫'}, {id:'added', name:'新增', symbol:'＋'}, {id:'deleted', name:'删除', symbol:'−'}, {id:'groups', name:'群变更', symbol:'◎'}, {id:'me', name:'我的', symbol:'◉'}]
+ const colors = chartColors()
+ const types = ['contact_added','contact_deleted','group_left','group_removed']
+ const addWayLabel = (value: string | null) => ({'1':'扫描二维码','2':'搜索手机号','3':'名片分享','4':'群聊添加','5':'手机通讯录','6':'微信联系人'}[value || ''] || (value?'其他方式':'方式未知'))
+@@ -48,9 +44,8 @@ function query(extra: Record<string,string> = {}) {
+   if(endDate.value && !extra.end_date) p.set('end_date',endDate.value)
+   return '?' + p.toString()
+ }
+-async function loadMe(restore = true, expectedVersion?: number) {
++async function loadMe(restore = true) {
+   const data = await api('/me')
+-  if(expectedVersion !== undefined && expectedVersion !== version) return
+   me.value = data; setCSRF(data.csrf_token)
+   const desired = restore ? (data.last_tenant_id ? String(data.last_tenant_id) : 'all') : tenant.value
+   tenant.value = desired === 'all' || data.tenants.some((t: AnyRow)=>String(t.id)===desired) ? desired : 'all'
+@@ -108,21 +103,16 @@ async function logout() {
+   } finally {busy.value=false}
+ }
+ let logoutToken = ''
+-const chartBottom = () => window.innerWidth<=760?88:58
+ async function drawChart() {
+   await nextTick()
+   if(!chartEl.value || !dashboard.value || tab.value !== 'dashboard') return
+   if (!chart || chart.isDisposed() || chart.getDom() !== chartEl.value) {
+     chart?.dispose(); resize?.disconnect(); chart = echarts.init(chartEl.value)
+-    resize = new ResizeObserver(()=>{
+-      if(!chart || chart.isDisposed()) return
+-      chart.setOption({grid:{bottom:chartBottom()}})
+-      chart.resize()
+-    }); resize.observe(chartEl.value)
++    resize = new ResizeObserver(()=>chart?.resize()); resize.observe(chartEl.value)
+   }
+   const data = dashboard.value.trend
+   chart.setOption({color:colors, tooltip:{trigger:'axis'}, legend:{bottom:0,icon:'circle',textStyle:{color:themeColor('--text-secondary')}},
+-    grid:{left:38,right:18,top:20,bottom:chartBottom()}, xAxis:{type:'category',boundaryGap:false,data:data.map((d:AnyRow)=>d.date),axisLine:{lineStyle:{color:themeColor('--border')}},axisTick:{show:false},axisLabel:{color:themeColor('--text-secondary'),formatter:(value:string)=>value.slice(5)}},
++    grid:{left:38,right:18,top:20,bottom:window.innerWidth<=760?88:58}, xAxis:{type:'category',boundaryGap:false,data:data.map((d:AnyRow)=>d.date.slice(5)),axisLine:{lineStyle:{color:themeColor('--border')}},axisTick:{show:false},axisLabel:{color:themeColor('--text-secondary')}},
+     yAxis:{type:'value',minInterval:1,splitLine:{lineStyle:{color:themeColor('--border')}},axisLabel:{color:themeColor('--text-secondary')}},
+     series:types.map((t,i)=>({name:labels[t],type:'line',smooth:true,showSymbol:false,lineStyle:{width:2.5},areaStyle:i===0?{opacity:.05}:undefined,data:data.map((d:AnyRow)=>d[t])}))})
+ }
+@@ -144,10 +134,6 @@ async function fetchRecords(more = false, currentVersion = version) {
+   records.value=more?[...records.value,...data.items]:data.items
+   effectiveRange.value=data.range || []; nextCursor.value=data.next_cursor; totals.value={records:data.total_records,quantity:data.total_quantity}
+ }
+-function refreshWithAvatars() {
+-  avatarRetry.value++
+-  void refresh()
+-}
+ async function refresh(reset = false) {
+   if(!me.value) return
+   const currentVersion=++version; loading.value=true;error.value='';pageError.value=''; if(reset) detail.value=null
+@@ -160,8 +146,6 @@ async function refresh(reset = false) {
+       if(reset) {records.value=[];nextCursor.value=null;totals.value={records:0,quantity:0};effectiveRange.value=[]}
+       await fetchRecords(false,currentVersion)
+       if(currentVersion===version && tab.value!=='groups') void loadEmployees()
+-    } else if(tab.value==='me') {
+-      await loadMe(false,currentVersion)
+     } else if(tab.value==='admin') {
+       const data=await Promise.all([api('/admin/tenants'),api('/admin/users'),api('/admin/jobs')])
+       if(currentVersion===version)[adminTenants.value,users.value,jobs.value]=data
+@@ -185,7 +169,7 @@ async function saveTenant(t:AnyRow){await mutation('/admin/tenants/'+t.id,{name:
+ async function saveGrants(u:AnyRow){await mutation('/admin/users/'+u.id+'/tenants',{tenant_ids:u.tenant_ids},'PUT')}
+ function cardClick(type:string){if(type==='contact_added')tab.value='added';else if(type==='contact_deleted')tab.value='deleted';else{groupType.value=type;tab.value='groups'}}
+ function pullStart(e:TouchEvent){if(!detail.value && window.scrollY<=0)touchStart=e.touches[0].clientY;else touchStart=0}
+-function pullEnd(e:TouchEvent){if(!detail.value && touchStart && e.changedTouches[0].clientY-touchStart>90 && !loading.value)refreshWithAvatars();touchStart=0}
++function pullEnd(e:TouchEvent){if(!detail.value && touchStart && e.changedTouches[0].clientY-touchStart>90 && !loading.value)void refresh();touchStart=0}
+ function expired(){
+   if(!me.value) return
+   clearSession(); error.value='登录已过期，请重新登录'
+@@ -281,15 +265,15 @@ onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();observer?.disconnect(
+     <aside class="sidebar">
+       <div class="brand"><span class="brandmark">◫</span><div>关系观察台<small>CLIENT INSIGHT</small></div></div>
+       <p class="nav-label">工作空间</p>
+-      <nav><button v-for="n in nav" :key="n.id" :class="{active:tab===n.id}" @click="tab=n.id"><NavIcon :name="n.id" />{{n.name}}<i v-if="tab===n.id">●</i></button></nav>
++      <nav><button v-for="n in nav" :key="n.id" :class="{active:tab===n.id}" @click="tab=n.id"><span>{{n.symbol}}</span>{{n.name}}<i v-if="tab===n.id">●</i></button></nav>
+       <button v-if="me.role==='admin'" class="admin-nav" :class="{active:tab==='admin'}" @click="tab='admin'">⚙ 主体与权限管理</button>
+-      <div class="sidebar-bottom"><Avatar :name="me.name" :url="me.avatar_url" /><div><span class="sidebar-user-name" :title="me.name">{{me.name}}</span><small>{{me.role==='admin'?'管理员':'授权用户'}}</small></div><button class="text-btn" @click="logout" title="退出登录">↗</button></div>
++      <div class="sidebar-bottom"><Avatar :name="me.name" :url="me.avatar_url" /><div>{{me.name}}<small>{{me.role==='admin'?'管理员':'授权用户'}}</small></div><button class="text-btn" @click="logout" title="退出登录">↗</button></div>
+     </aside>
+     <main>
+       <header class="topbar"><span>工作台 <span class="slash">/</span> {{tab==='admin'?'配置管理':nav.find(n=>n.id===tab)?.name}}</span><span class="environment"><span class="dot"></span>{{config.demo_enabled?'本地演示环境':'企业工作空间'}}</span></header>
+-      <section class="page-heading"><div><p class="eyebrow">{{tab==='dashboard'?'OVERVIEW':'WORKSPACE'}}</p><h1>{{tab==='dashboard'?'客户关系汇总':tab==='admin'?'主体与权限管理':tab==='me'?'个人中心':tab==='groups'?'群成员变更':tab==='added'?'新增联系人':'删除联系人'}}</h1><p class="muted">{{tab==='dashboard'?'看见增长，也看见每一次流失。':tab==='admin'?'管理接入配置、访问范围与事件处理任务。':'所有记录按主体授权展示，时间统一为北京时间。'}}</p></div><button class="secondary" :disabled="loading" @click="refreshWithAvatars()">↻ {{loading?'更新中…':'刷新数据'}}</button></section>
++      <section class="page-heading"><div><p class="eyebrow">{{tab==='dashboard'?'OVERVIEW':'WORKSPACE'}}</p><h1>{{tab==='dashboard'?'客户关系总览':tab==='admin'?'主体与权限管理':tab==='me'?'个人中心':tab==='groups'?'群成员变更':tab==='added'?'新增联系人':'删除联系人'}}</h1><p class="muted">{{tab==='dashboard'?'看见增长，也看见每一次流失。':tab==='admin'?'管理接入配置、访问范围与事件处理任务。':'所有记录按主体授权展示，时间统一为北京时间。'}}</p></div><button class="secondary" :disabled="loading" @click="refresh()">↻ {{loading?'更新中…':'刷新数据'}}</button></section>
+       <div v-if="config.demo_enabled" class="demo-banner">演示模式：页面数据由本地种子生成，不代表真实企业数据或平台联调结果。</div>
+-      <p v-if="loading" class="loading-status" role="status">正在更新数据，网络较慢时请稍候…</p><div v-if="error" class="error" role="alert">{{error}} <button class="text-btn" @click="refreshWithAvatars()">重试</button></div>
++      <p v-if="loading" class="loading-status" role="status">正在更新数据，网络较慢时请稍候…</p><div v-if="error" class="error" role="alert">{{error}} <button class="text-btn" @click="refresh()">重试</button></div>
+       <section v-if="!['me','admin'].includes(tab)" class="filters">
+         <label>当前主体<select v-model="tenant"><option value="all">全部授权主体</option><option v-for="t in me.tenants" :key="t.id" :value="String(t.id)">{{t.name}}</option></select></label>
+         <template v-if="tab==='dashboard'"><label>开始日期<input v-model="startDate" type="date" aria-label="开始日期"></label><span class="date-sep">—</span><label>结束日期<input v-model="endDate" type="date" aria-label="结束日期"></label>
+@@ -301,7 +285,7 @@ onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();observer?.disconnect(
+           <p class="range-summary">指标与排名区间：{{dashboard.metrics_range[0]}} 至 {{dashboard.metrics_range[1]}}</p><div class="metrics"><button v-for="(card,i) in dashboard.cards" :key="card.type" class="metric" @click="cardClick(card.type)"><div class="metric-top"><span>{{labels[card.type]}}</span><span class="metric-symbol" :style="{color:eventColor(card.type)}">{{['↗','↘','↪','⊖'][Number(i)]}}</span></div><strong>{{card.value.toLocaleString()}}<small>人次</small></strong><div class="metric-footer"><span :class="card.delta>0?'up':card.delta<0?'down':'neutral'">{{card.delta>0?'↑ +':card.delta<0?'↓ ':''}}{{card.delta}}</span><span>较上一周期</span><span class="metric-arrow">↗</span></div></button></div>
+           <div v-if="dashboard.unresolved_count || dashboard.pending_jobs" class="notice">有 {{dashboard.unresolved_count}} 人次属于其他群成员变更或仍待核实，未计入外部客户流失指标，{{dashboard.pending_jobs}} 个任务尚未完成。详情和指标可能继续补全。</div>
+           <section class="panel trend-panel"><div class="panel-title"><div><h2>关系变化趋势</h2><p>按日查看四类事件，点击图例切换显示</p></div><span class="badge">{{dashboard.trend.length}} 天</span></div><div ref="chartEl" class="chart" aria-label="四类事件趋势图"></div><p class="chart-foot">统计区间 {{dashboard.trend_range[0]}} 至 {{dashboard.trend_range[1]}} · 截至 {{dateText(dashboard.updated_at)}}</p></section>
+-          <div class="rankings"><section v-for="(type,i) in ['contact_added','contact_deleted','group_left']" :key="type" class="panel"><div class="panel-title"><h2>{{['新增客户员工','删除关系员工','主动退群群聊'][i]}} <span class="top-label">TOP 5</span></h2><button class="text-btn" @click="cardClick(type)">明细 ↗</button></div><div v-if="!dashboard.tops[type].length" class="empty small">暂无数据</div><div v-for="(r,index) in dashboard.tops[type]" :key="r.tenant_id+':'+r.id" class="rank-row"><span class="rank-number" :class="{first:index===0}">{{String(Number(index)+1).padStart(2,'0')}}</span><div class="rank-name">{{r.name}}<small>{{tenantName(r.tenant_id)}}</small><div class="rank-bar"><i :style="{width:(r.count/dashboard.tops[type][0].count*100)+'%',background:eventColor(type)}"></i></div></div><strong>{{r.count}}<small>人次</small></strong></div></section></div>
++          <div class="rankings"><section v-for="(type,i) in ['contact_added','contact_deleted','group_left']" :key="type" class="panel"><div class="panel-title"><h2>{{['新增员工','删除关系员工','主动退群群聊'][i]}} <span class="top-label">TOP 5</span></h2><button class="text-btn" @click="cardClick(type)">明细 ↗</button></div><div v-if="!dashboard.tops[type].length" class="empty small">暂无数据</div><div v-for="(r,index) in dashboard.tops[type]" :key="r.tenant_id+':'+r.id" class="rank-row"><span class="rank-number" :class="{first:index===0}">{{String(Number(index)+1).padStart(2,'0')}}</span><div class="rank-name">{{r.name}}<small>{{tenantName(r.tenant_id)}}</small><div class="rank-bar"><i :style="{width:(r.count/dashboard.tops[type][0].count*100)+'%',background:eventColor(type)}"></i></div></div><strong>{{r.count}}<small>人次</small></strong></div></section></div>
+         </template>
+       </template>
+       <template v-else-if="['added','deleted','groups'].includes(tab)">
+@@ -316,9 +300,9 @@ onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();observer?.disconnect(
+         <section class="panel admin-panel"><h2>用户与授权</h2><form class="admin-form" @submit.prevent="createUser"><input v-model="userForm.name" placeholder="用户姓名" required><input v-model="userForm.ding_corp_id" placeholder="钉钉 CorpID" required><input v-model="userForm.ding_user_id" placeholder="钉钉 UserID" required><button class="primary" :disabled="busy">新增用户</button></form><div v-for="u in users" :key="u.id" class="admin-item"><strong>{{u.name}}</strong><span class="muted"> · {{u.ding_user_id}}</span><p v-if="u.role==='admin'">管理员可访问所有启用主体</p><template v-else><div class="grant-options"><label v-for="t in adminTenants"><input type="checkbox" :value="t.id" v-model="u.tenant_ids">{{t.name}}</label></div><button class="secondary" :disabled="busy" @click="saveGrants(u)">保存授权</button></template></div></section>
+         <section class="panel admin-panel"><h2>最近处理任务</h2><p class="muted">最多显示最近 100 条。失败任务在修复配置后可重新排队。</p><div v-if="!jobs.length" class="empty small">暂无处理任务</div><div v-for="j in jobs" class="job-row"><span>#{{j.id}} · 主体 {{j.tenant_id}}</span><span class="badge">{{j.status}}</span><span>{{j.attempts}} 次尝试</span><code>{{j.last_error}}</code><button v-if="['failed','retry'].includes(j.status)" class="secondary" :disabled="busy" @click="mutation('/admin/jobs/'+j.id+'/retry',{})">重试</button></div></section>
+       </template>
+-      <footer class="page-footer">关系观察台 <span>数据按北京时间统计 · 每 30 秒更新汇总</span></footer>
++      <footer class="page-footer">关系观察台 <span>数据按北京时间统计 · 每 30 秒更新总览</span></footer>
+     </main>
+-    <nav class="mobile-nav"><button v-for="n in nav" :key="n.id" :class="{active:tab===n.id}" @click="tab=n.id"><NavIcon :name="n.id" />{{n.name}}</button></nav>
++    <nav class="mobile-nav"><button v-for="n in nav" :class="{active:tab===n.id}" @click="tab=n.id"><span>{{n.symbol}}</span>{{n.name}}</button></nav>
+     <div v-if="detail" class="modal-backdrop" @click.self="detail=null">
+       <section ref="dialogEl" class="modal" tabindex="-1" @keydown="dialogKey" role="dialog" aria-modal="true" aria-label="事件详情">
+         <button class="close" @click="detail=null" aria-label="关闭">×</button>

@@ -1,0 +1,32 @@
+[1/4] Build frontend locally
+✓ Lockfile passes supply-chain policies (verified 1d ago)
+Lockfile is up to date, resolution step is skipped
+Done in 24ms using pnpm v12.14.0
+$ vue-tsc --noEmit && vite build
+vite v7.3.7 building client environment for production...
+transforming...
+✓ 1623 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.43 kB │ gzip:   0.32 kB
+dist/assets/index-rCg_9YbW.css   19.24 kB │ gzip:   4.44 kB
+dist/assets/index-BzmKLZsx.js   317.68 kB │ gzip:  55.84 kB
+dist/assets/index-tdFUSI4G.js   627.32 kB │ gzip: 217.54 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 5.27s
+[2/4] Release package: D:\workspace\test\.deploy\release-87551527d8564c87b38ec54216dcb4a2.zip
+[3/4] Upload source and frontend/dist
+[4/4] Back up, install, restart and check /readyz
+备份数据库、媒体和环境配置……
+Backup completed. Preserve PAYLOAD_KEY separately for recovery.
+停止当前项目服务……
+同步 Python 依赖……
+Resolved 44 packages in 1ms
+Checked 35 packages in 0.40ms
+更新完成：服务已启动，/readyz 检查通过，端口 8000。
+本次备份：/root/workspace/wecom-monitor/backups/deploy-20261023-163633-700651
+Deployment succeeded: remote /readyz returned status=ready.

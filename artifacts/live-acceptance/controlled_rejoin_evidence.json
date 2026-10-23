@@ -1,0 +1,2 @@
+{"callback_id": 1832, "received_at": "2026-10-23T14:22:08.611000+08:00", "event": "change_external_chat", "change_type": "update", "update_detail": "add_member", "job_status": "done", "same_group_as_departure": true, "same_member_id_matches": true, "member_type": 2, "media_id": 2, "same_media_as_before": true, "avatar_state": "stored", "group_synced_at": "2026-10-23T14:22:09.558000+08:00", "business_events_from_join_callback": 0, "manual_sync_after_rejoin": false}
+

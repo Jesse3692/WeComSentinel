@@ -1,0 +1,2 @@
+{"business_events": 1814, "real_events": 19, "media_count": 2, "integrity": "ok", "ordinary_grant_counts": [0], "real_added_source_codes": {"0": 1, "4": 1, "6": 1}, "app_api_sha256": "df756437d2f43a12d2fac86c0acd344b975c5129d3823fa5fa702ccd825687ce", "media_integrity": [{"exists": true, "matches_stored_hash": true}, {"exists": true, "matches_stored_hash": true}]}
+

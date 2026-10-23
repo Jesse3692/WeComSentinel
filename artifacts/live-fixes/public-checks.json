@@ -1,0 +1,75 @@
+{
+  "checked_at": "2026-10-23T15:49:51.172715+08:00",
+  "http": {
+    "status": 200,
+    "redirects_to_https": false
+  },
+  "assets": [
+    {
+      "asset": "/assets/index-G-yjg4X3.js",
+      "status": 200,
+      "matches_local": true
+    },
+    {
+      "asset": "/assets/index-kVCl0Vyh.css",
+      "status": 200,
+      "matches_local": true
+    }
+  ],
+  "auth_boundaries": [
+    {
+      "path": "/api/v1/me",
+      "unauthenticated_status": 401
+    },
+    {
+      "path": "/api/v1/dashboard",
+      "unauthenticated_status": 401
+    },
+    {
+      "path": "/api/v1/events",
+      "unauthenticated_status": 401
+    },
+    {
+      "path": "/api/v1/employees",
+      "unauthenticated_status": 401
+    },
+    {
+      "path": "/api/v1/media/1",
+      "unauthenticated_status": 401
+    },
+    {
+      "path": "/api/v1/admin/tenants",
+      "unauthenticated_status": 401
+    },
+    {
+      "path": "/api/v1/admin/users",
+      "unauthenticated_status": 401
+    },
+    {
+      "path": "/api/v1/admin/jobs",
+      "unauthenticated_status": 401
+    }
+  ],
+  "readyz": {
+    "status": 200,
+    "ready": true
+  },
+  "public_config": {
+    "status": 200,
+    "demo_disabled": true,
+    "ding_configured": true
+  },
+  "frontend": {
+    "status": 200,
+    "mime": "text/html; charset=utf-8"
+  },
+  "demo_login_disabled": {
+    "status": 404,
+    "session_cookie_issued": false
+  },
+  "tls": {
+    "verified": true,
+    "protocol": "TLSv1.3",
+    "certificate_expiry": "Jan 19 06:59:59 2027 GMT"
+  }
+}

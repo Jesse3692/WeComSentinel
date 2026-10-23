@@ -698,22 +698,31 @@ main {
   display:grid;
   place-items:center;
   z-index:100;
-  padding:20px
+  padding:20px;
+  padding:max(12px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-right)) max(12px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left));
+  min-width:0
 }
 .modal {
   background:white;
   border-radius:14px;
-  padding:32px;
-  width:500px;
-  max-width:100%;
-  max-height:85vh;
-  overflow:auto;
+  padding:0;
+  width:min(500px,100%);
+  min-width:0;
+  max-height:calc(100vh - 40px);
+  max-height:calc(100dvh - max(12px,env(safe-area-inset-top)) - max(12px,env(safe-area-inset-bottom)));
+  overflow:hidden;
+  display:flex;
+  flex-direction:column;
   position:relative
 }
+.modal-header {display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border);flex:none}
+.modal-header h2 {min-width:0;overflow-wrap:anywhere;font-size:18px}
+.modal-body {min-height:0;min-width:0;overflow:auto;overscroll-behavior:contain;padding:0 24px 24px}
 .close {
-  position:absolute;
-  right:15px;
-  top:15px;
+  flex:none;
+  width:44px;
+  height:44px;
+  padding:0;
   background:none;
   color:var(--text-secondary);
   font-size:24px
@@ -734,7 +743,11 @@ main {
 }
 .login-shell {
   min-height:100vh;
+  min-height:100dvh;
+  width:100%;
+  min-width:0;
   display:grid;
+  grid-template-columns:minmax(0,1fr);
   place-items:center;
   background:radial-gradient(ellipse at 20% 0%,var(--border),transparent 60%),var(--bg-subtle);
   padding:30px
@@ -745,8 +758,27 @@ main {
   box-shadow:0 20px 100px #344a2510;
   border-radius:18px;
   padding:40px;
-  width:460px;
-  max-width:100%
+  width:min(460px,100%);
+  min-width:0;
+  overflow-wrap:anywhere
+}
+.access-denied .secondary {margin-top:12px}
+.employee-filter {display:grid;gap:8px;min-width:0;max-width:100%}
+.employee-search {display:flex;align-items:end;gap:8px;flex-wrap:wrap;min-width:0}
+.employee-search label {flex:1;min-width:160px}
+.employee-search input {width:100%;min-width:0}
+.pagination-space {width:100%;margin-top:20px}
+.app-shell main.paged-main {padding-bottom:calc(var(--bottom-nav-height,0px) + 24px)}
+.pagination {position:fixed;bottom:0;left:16px;right:16px;z-index:35;display:flex;align-items:center;justify-content:flex-end;gap:16px;flex-wrap:wrap;margin:0;padding:12px;background:var(--bg-card);border:1px solid var(--border);border-bottom:0;border-radius:8px 8px 0 0;box-shadow:0 -4px 16px #171a1d0d}
+.pagination .page-summary {margin-right:auto;font-size:var(--font-caption);color:var(--text-secondary)}
+.pagination label {display:flex;flex-direction:row;align-items:center;gap:8px;font-size:var(--font-caption);color:var(--text-secondary)}
+.pagination select {height:44px;min-height:44px}
+.page-actions {display:flex;gap:8px}
+.page-actions button {min-height:44px}
+@media(max-width:760px) {
+  .employee-filter {width:100%}
+  .pagination {justify-content:space-between;gap:12px}
+  .pagination .page-summary {flex-basis:100%}
 }
 .login-card .eyebrow {
   margin-top:25px
@@ -1069,7 +1101,7 @@ button:focus-visible,input:focus-visible,select:focus-visible {outline:3px solid
  .event-content strong {font-size:15px} .event-content p {font-size:14px}
  .filters select {min-width:0;width:100%} .filters input[type=date] {font-size:14px}
  .tabs {flex-wrap:wrap} .tabs button {min-height:40px} .detail-toolbar {gap:12px}
- .modal {padding:24px 16px} .modal dl {grid-template-columns:84px minmax(0,1fr);font-size:14px;gap:12px}
+ .modal-body {padding:0 16px 20px} .modal dl {grid-template-columns:84px minmax(0,1fr);font-size:14px;gap:12px}
  .employee-identity .avatar {width:24px;height:24px}
  .metric strong {font-size:30px} .metric-footer {flex-wrap:wrap}
  .event-row time {white-space:normal} .page-heading .secondary {flex-shrink:0}
@@ -1079,3 +1111,43 @@ button:focus-visible,input:focus-visible,select:focus-visible {outline:3px solid
 
 .member-avatars {display:flex;align-items:center;gap:4px;flex-wrap:wrap;max-width:128px}
 .member-avatars .avatar {width:32px;height:32px}
+.dashboard-content,.dashboard-primary {display:contents}
+.event-columns {display:none}
+@media(min-width:1800px) {
+  main {max-width:none;padding-inline:clamp(40px,2vw,80px)}
+  .app-shell {--font-caption:13px}
+  .sidebar {--font-caption:12px}
+  .topbar {height:64px}
+  .page-heading {margin:24px 0}
+  .page-heading h1 {font-size:28px}
+  .metric {padding:24px}
+  .metric-top,.metric-footer,.event-content strong,.event-content p,.rank-name,.rankings h2 {font-size:14px}
+  .metric strong {font-size:44px}
+  .chart {height:clamp(360px,32vh,520px)}
+  .panel-title h2 {font-size:18px}
+  .contact-list .event-row,.event-columns {display:grid;grid-template-columns:44px minmax(0,1fr) 190px 16px;gap:24px}
+  .event-columns {align-items:center;padding:0 0 16px;border-bottom:1px solid var(--border);font-size:13px;color:var(--text-secondary)}
+  .contact-list .event-content,.event-column-main {display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);column-gap:40px;row-gap:4px;align-items:start}
+  .contact-list .event-content>strong {grid-column:1;grid-row:1}
+  .contact-list .event-content>p {grid-column:1;grid-row:2;margin:0}
+  .contact-list .employee-identity {grid-column:2;grid-row:1;margin:0;font-size:14px}
+  .contact-list .event-content>small {grid-column:2;grid-row:2;margin:0}
+  .contact-list .event-row time {font-size:14px;white-space:normal}
+  .employee-filter {display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap}
+  .employee-search label {min-width:260px}
+  .employee-filter>label {min-width:240px;max-width:420px}
+  .profile {max-width:760px}
+}
+@media(min-width:2200px) {
+  .dashboard-content {display:grid;grid-template-columns:minmax(0,2.4fr) minmax(440px,1fr);gap:24px;align-items:start}
+  .dashboard-primary {display:block;min-width:0}
+  .dashboard-content .rankings {grid-template-columns:minmax(0,1fr);gap:16px;margin-top:12px;min-width:0}
+  .dashboard-content .rankings .panel {padding:20px}
+  .dashboard-content .rank-row {margin-top:12px}
+  .dashboard-content .rank-name {display:grid;grid-template-columns:minmax(0,1fr) minmax(60px,25%);gap:4px 12px;align-items:start}
+  .dashboard-content .rank-bar {grid-column:1 / -1;margin-top:0}
+  .dashboard-content .rank-name small {margin:0;text-align:right}
+  .dashboard-content .rank-row strong {display:flex;align-items:baseline;gap:4px}
+  .dashboard-content .rank-row strong small {display:inline;margin:0}
+  .dashboard-content .rank-number {font-size:14px}
+}

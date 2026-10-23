@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, watch, provide, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, reactive, computed, watch, provide, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import * as echarts from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
@@ -14,10 +14,14 @@ echarts.use([LineChart, GridComponent, LegendComponent, TooltipComponent, Canvas
 
 type AnyRow = Record<string, any>
 const config = ref<AnyRow>({}), me = ref<AnyRow | null>(null), tab = ref('dashboard')
+const accessDenied = computed(()=>!!me.value && me.value.role!=='admin' && !me.value.tenants.length)
 const avatarRetry = ref(0)
 provide(avatarRetryKey, avatarRetry)
 const logoutPending = ref(false), pageError = ref(''), effectiveRange = ref<string[]>([])
 const employeeKeyword = ref(''), employeeOffset = ref(0), employeeMore = ref(false)
+const appliedEmployeeKeyword = ref(''), pageNumber = ref(1), pageSize = ref('20')
+const pageCursors = ref<(string | null)[]>([null])
+const totalPages = computed(()=>Math.max(1,Math.ceil(totals.value.records/Number(pageSize.value))))
 let employeeVersion = 0
 const password = ref(''), demoRole = ref('admin'), error = ref(''), busy = ref(false), loading = ref(false)
 const tenant = ref('all'), startDate = ref(''), endDate = ref(''), employee = ref(''), addWay = ref(''), groupSearch = ref('')
@@ -26,14 +30,17 @@ const nextCursor = ref<string | null>(null), totals = ref({records: 0, quantity:
 const detail = ref<AnyRow | null>(null), adminTenants = ref<AnyRow[]>([]), users = ref<AnyRow[]>([]), jobs = ref<AnyRow[]>([])
 const tenantForm = reactive({name: '', corp_id: '', credential_ref: '', enabled: true})
 const userForm = reactive({name: '', ding_corp_id: '', ding_user_id: ''})
-const chartEl = ref<HTMLElement | null>(null), sentinel = ref<HTMLElement | null>(null)
-let chart: echarts.ECharts | undefined, resize: ResizeObserver | undefined, observer: IntersectionObserver | undefined
-let version = 0, searchTimer: ReturnType<typeof setTimeout>, touchStart = 0, refreshTimer: ReturnType<typeof setInterval>
+const chartEl = ref<HTMLElement | null>(null), eventListEl = ref<HTMLElement | null>(null)
+const paginationHost = ref<HTMLElement | null>(null), paginationEl = ref<HTMLElement | null>(null), mobileNavEl = ref<HTMLElement | null>(null)
+const paginationHeight = ref(0), bottomNavHeight = ref(0), paginationStyle = ref<Record<string,string>>({})
+let dockObserver: ResizeObserver | undefined
+let chart: echarts.ECharts | undefined, resize: ResizeObserver | undefined
+let version = 0, searchTimer: ReturnType<typeof setTimeout>, employeeSearchTimer: ReturnType<typeof setTimeout>, touchStart = 0, refreshTimer: ReturnType<typeof setInterval>
 const labels: Record<string, string> = {contact_added:'新增联系人', contact_deleted:'删除联系人', group_left:'主动退群', group_removed:'被移出群', group_change_unknown:'其他 / 待核实'}
 const nav = [{id:'dashboard', name:'汇总'}, {id:'added', name:'新增'}, {id:'deleted', name:'删除'}, {id:'groups', name:'群变更'}, {id:'me', name:'我的'}]
 const colors = chartColors()
 const types = ['contact_added','contact_deleted','group_left','group_removed']
-const addWayLabel = (value: string | null) => ({'1':'扫描二维码','2':'搜索手机号','3':'名片分享','4':'群聊添加','5':'手机通讯录','6':'微信联系人'}[value || ''] || (value?'其他方式':'方式未知'))
+const addWayLabel = (value: string | null) => ({'0':'方式未知','1':'扫描二维码','2':'搜索手机号','3':'名片分享','4':'群聊添加','5':'手机通讯录','6':'微信联系人'}[value || ''] || (value?'其他方式':'方式未知'))
 const dateText = (value: number) => new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(value)
 const tenantName = (id: number) => me.value?.tenants.find((t: AnyRow) => t.id === id)?.name || '未授权主体'
 const isGroupEvent = (row: AnyRow) => ['group_left', 'group_removed', 'group_change_unknown'].includes(row.event_type)
@@ -51,19 +58,29 @@ function query(extra: Record<string,string> = {}) {
 async function loadMe(restore = true, expectedVersion?: number) {
   const data = await api('/me')
   if(expectedVersion !== undefined && expectedVersion !== version) return
+  const before = me.value?.tenants.map((t:AnyRow)=>t.id).sort().join(',')
+  if(before !== undefined && before !== data.tenants.map((t:AnyRow)=>t.id).sort().join(',')) clearBusinessData()
   me.value = data; setCSRF(data.csrf_token)
   const desired = restore ? (data.last_tenant_id ? String(data.last_tenant_id) : 'all') : tenant.value
   tenant.value = desired === 'all' || data.tenants.some((t: AnyRow)=>String(t.id)===desired) ? desired : 'all'
 }
+function clearBusinessData() {
+  detail.value=null; dashboard.value=null; records.value=[]; employees.value=[]; employeeVersion++
+  nextCursor.value=null; totals.value={records:0,quantity:0}; effectiveRange.value=[]
+  employee.value=''; employeeKeyword.value=''; appliedEmployeeKeyword.value=''; employeeMore.value=false; employeeOffset.value=0
+  pageNumber.value=1;pageCursors.value=[null];clearTimeout(employeeSearchTimer)
+  adminTenants.value=[];users.value=[];jobs.value=[];pageError.value=''
+  chart?.dispose();resize?.disconnect()
+}
 function clearSession() {
-  invalidateSession(); version++; employeeVersion++; clearTimeout(searchTimer)
+  invalidateSession(); version++; employeeVersion++; clearTimeout(searchTimer);clearTimeout(employeeSearchTimer)
   me.value=null; detail.value=null; dashboard.value=null; records.value=[]; employees.value=[]
   nextCursor.value=null; totals.value={records:0,quantity:0}; effectiveRange.value=[]
   adminTenants.value=[]; users.value=[]; jobs.value=[]; loading.value=false; busy.value=false
   Object.assign(tenantForm,{name:'',corp_id:'',credential_ref:'',enabled:true})
   Object.assign(userForm,{name:'',ding_corp_id:'',ding_user_id:''})
-  employee.value='';employeeKeyword.value='';addWay.value='';groupSearch.value='';startDate.value='';endDate.value='';password.value=''
-  pageError.value=''; employeeMore.value=false;employeeOffset.value=0; chart?.dispose(); resize?.disconnect(); observer?.disconnect()
+  employee.value='';employeeKeyword.value='';appliedEmployeeKeyword.value='';pageNumber.value=1;pageCursors.value=[null];addWay.value='';groupSearch.value='';startDate.value='';endDate.value='';password.value=''
+  pageError.value=''; employeeMore.value=false;employeeOffset.value=0; chart?.dispose(); resize?.disconnect()
   if(document.body.style.overflow==='hidden') document.body.style.overflow=previousOverflow
 }
 async function login(demo = false) {
@@ -109,6 +126,7 @@ async function logout() {
 }
 let logoutToken = ''
 const chartBottom = () => window.innerWidth<=760?88:58
+const chartLabelSize = () => window.innerWidth>=1800?14:12
 async function drawChart() {
   await nextTick()
   if(!chartEl.value || !dashboard.value || tab.value !== 'dashboard') return
@@ -116,32 +134,36 @@ async function drawChart() {
     chart?.dispose(); resize?.disconnect(); chart = echarts.init(chartEl.value)
     resize = new ResizeObserver(()=>{
       if(!chart || chart.isDisposed()) return
-      chart.setOption({grid:{bottom:chartBottom()}})
+      chart.setOption({grid:{bottom:chartBottom()},legend:{textStyle:{fontSize:chartLabelSize()}},xAxis:{axisLabel:{fontSize:chartLabelSize()}},yAxis:{axisLabel:{fontSize:chartLabelSize()}}})
       chart.resize()
     }); resize.observe(chartEl.value)
   }
   const data = dashboard.value.trend
-  chart.setOption({color:colors, tooltip:{trigger:'axis'}, legend:{bottom:0,icon:'circle',textStyle:{color:themeColor('--text-secondary')}},
-    grid:{left:38,right:18,top:20,bottom:chartBottom()}, xAxis:{type:'category',boundaryGap:false,data:data.map((d:AnyRow)=>d.date),axisLine:{lineStyle:{color:themeColor('--border')}},axisTick:{show:false},axisLabel:{color:themeColor('--text-secondary'),formatter:(value:string)=>value.slice(5)}},
-    yAxis:{type:'value',minInterval:1,splitLine:{lineStyle:{color:themeColor('--border')}},axisLabel:{color:themeColor('--text-secondary')}},
+  chart.setOption({color:colors, tooltip:{trigger:'axis'}, legend:{bottom:0,icon:'circle',textStyle:{color:themeColor('--text-secondary'),fontSize:chartLabelSize()}},
+    grid:{left:38,right:18,top:20,bottom:chartBottom()}, xAxis:{type:'category',boundaryGap:false,data:data.map((d:AnyRow)=>d.date),axisLine:{lineStyle:{color:themeColor('--border')}},axisTick:{show:false},axisLabel:{color:themeColor('--text-secondary'),fontSize:chartLabelSize(),formatter:(value:string)=>value.slice(5)}},
+    yAxis:{type:'value',minInterval:1,splitLine:{lineStyle:{color:themeColor('--border')}},axisLabel:{color:themeColor('--text-secondary'),fontSize:chartLabelSize()}},
     series:types.map((t,i)=>({name:labels[t],type:'line',smooth:true,showSymbol:false,lineStyle:{width:2.5},areaStyle:i===0?{opacity:.05}:undefined,data:data.map((d:AnyRow)=>d[t])}))})
 }
-async function fetchRecords(more = false, currentVersion = version) {
+async function fetchRecords(cursor: string | null = null, currentVersion = version, targetPage = 1) {
   const eventType = tab.value==='added'?'contact_added':tab.value==='deleted'?'contact_deleted':groupType.value
-  const params: Record<string,string> = {event_type:eventType}
+  const params: Record<string,string> = {event_type:eventType,limit:pageSize.value}
+  if(appliedEmployeeKeyword.value && !employee.value && tab.value!=='groups') params.employee_keyword=appliedEmployeeKeyword.value
   if(employee.value && tab.value!=='groups') {
     const [employeeTenant, employeeId] = JSON.parse(employee.value)
     params.employee_id=employeeId; params.employee_tenant_id=String(employeeTenant)
   }
   if(addWay.value && tab.value==='added') params.add_way=addWay.value
   if(groupSearch.value && tab.value==='groups') params.group_keyword=groupSearch.value
-  if(more && nextCursor.value) {
-    params.cursor=nextCursor.value
+  if(cursor) params.cursor=cursor
+  if(targetPage!==1 || cursor) {
     if(effectiveRange.value.length===2) {params.start_date=effectiveRange.value[0];params.end_date=effectiveRange.value[1]}
   }
   const data = await api('/events'+query(params))
   if(currentVersion !== version) return
-  records.value=more?[...records.value,...data.items]:data.items
+  records.value=data.items
+  if(targetPage===1 && !cursor)pageCursors.value=[data.page_cursor || null]
+  else pageCursors.value[targetPage-1]=data.page_cursor || cursor
+  pageNumber.value=targetPage
   effectiveRange.value=data.range || []; nextCursor.value=data.next_cursor; totals.value={records:data.total_records,quantity:data.total_quantity}
 }
 function refreshWithAvatars() {
@@ -152,27 +174,49 @@ async function refresh(reset = false) {
   if(!me.value) return
   const currentVersion=++version; loading.value=true;error.value='';pageError.value=''; if(reset) detail.value=null
   try {
+    await loadMe(false,currentVersion)
+    if(currentVersion!==version || accessDenied.value) return
     if(tab.value==='dashboard') {
       if(reset) dashboard.value=null
       const data=await api('/dashboard'+query()); if(currentVersion!==version)return
       dashboard.value=data; await drawChart()
     } else if(['added','deleted','groups'].includes(tab.value)) {
-      if(reset) {records.value=[];nextCursor.value=null;totals.value={records:0,quantity:0};effectiveRange.value=[]}
-      await fetchRecords(false,currentVersion)
+      if(reset) {records.value=[];nextCursor.value=null;totals.value={records:0,quantity:0};effectiveRange.value=[];pageNumber.value=1;pageCursors.value=[null]}
+      await fetchRecords(null,currentVersion)
       if(currentVersion===version && tab.value!=='groups') void loadEmployees()
-    } else if(tab.value==='me') {
-      await loadMe(false,currentVersion)
     } else if(tab.value==='admin') {
       const data=await Promise.all([api('/admin/tenants'),api('/admin/users'),api('/admin/jobs')])
       if(currentVersion===version)[adminTenants.value,users.value,jobs.value]=data
     }
-  } catch(e:any){if(currentVersion===version)error.value=(dashboard.value && tab.value==='dashboard' || records.value.length && ['added','deleted','groups'].includes(tab.value) ? '更新失败，当前保留上次数据：' : '加载失败：')+e.message}
+  } catch(e:any){
+    if(currentVersion!==version)return
+    if(e.status===403) {
+      clearBusinessData()
+      try {await loadMe(false,currentVersion)} catch { /* Keep the original access error. */ }
+      if(currentVersion!==version)return
+    }
+    error.value=(dashboard.value && tab.value==='dashboard' || records.value.length && ['added','deleted','groups'].includes(tab.value) ? '更新失败，当前保留上次数据：' : '加载失败：')+e.message
+  }
   finally{if(currentVersion===version)loading.value=false}
 }
-async function loadMore() {
-  if(loading.value || !nextCursor.value)return
-  const v=version;loading.value=true;pageError.value=''
-  try{await fetchRecords(true,v)}catch(e:any){if(v===version)pageError.value='加载更多失败：'+e.message}finally{if(v===version)loading.value=false}
+async function changePage(direction: number) {
+  if(loading.value || accessDenied.value || (direction<0 && pageNumber.value===1) || (direction>0 && !nextCursor.value))return
+  const target=pageNumber.value+direction, cursor=direction>0?nextCursor.value:pageCursors.value[target-1]
+  const v=++version;loading.value=true;pageError.value=''
+  try{
+    await loadMe(false,v)
+    if(v!==version || accessDenied.value)return
+    // A changed access scope invalidates every saved cursor.
+    if((direction<0 && pageNumber.value===1) || (direction>0 && !nextCursor.value)) {
+      void refresh(true);return
+    }
+    await fetchRecords(cursor,v,target)
+    await nextTick()
+    if(v===version)eventListEl.value?.scrollIntoView({block:'start'})
+  }catch(e:any){if(v===version){
+    if(e.status===403) {clearBusinessData();try {await loadMe(false,v)}catch{}}
+    if(v===version)pageError.value='翻页失败：'+e.message
+  }}finally{if(v===version)loading.value=false}
 }
 async function mutation(path:string, body:unknown, method='POST') {
   const generation=sessionGeneration()
@@ -191,8 +235,9 @@ function expired(){
   clearSession(); error.value='登录已过期，请重新登录'
   if(!sessionStorage.getItem('logged-out') && !logoutPending.value && config.value.ding_configured && /DingTalk/i.test(navigator.userAgent)) void login()
 }
-watch(tenant,()=>{employee.value='';employees.value=[];employeeKeyword.value='';employeeVersion++}, {flush:'sync'})
-watch([tenant,startDate,endDate,tab,employee,addWay,groupType],()=>{void refresh(true)})
+watch(tenant,()=>{employee.value='';employees.value=[];employeeKeyword.value='';appliedEmployeeKeyword.value='';employeeVersion++;clearTimeout(employeeSearchTimer)}, {flush:'sync'})
+watch([tenant,startDate,endDate,tab,employee,addWay,groupType,appliedEmployeeKeyword,pageSize],()=>{void refresh(true)})
+watch(employee,(value)=>{if(value){clearTimeout(employeeSearchTimer);appliedEmployeeKeyword.value=employeeKeyword.value.trim()}}, {flush:'sync'})
 let preferenceQueue: Promise<void> = Promise.resolve()
 watch(tenant,()=>{
   if(!me.value) return
@@ -204,7 +249,7 @@ watch(tenant,()=>{
   })
 })
 async function loadEmployees(more = false) {
-  if(!me.value || logoutPending.value || !['added','deleted'].includes(tab.value)) return
+  if(!me.value || accessDenied.value || logoutPending.value || !['added','deleted'].includes(tab.value)) return
   const pageVersion=version
   const current=++employeeVersion, generation=sessionGeneration(), selected=tenant.value
   const offset=more?employeeOffset.value:0
@@ -217,17 +262,19 @@ async function loadEmployees(more = false) {
     employeeOffset.value=offset+data.length;employeeMore.value=data.length===100
   } catch(e:any){if(current===employeeVersion && generation===sessionGeneration() && pageVersion===version)error.value=e.message}
 }
-watch(employeeKeyword,()=>{void loadEmployees()})
-watch(groupSearch,()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>void refresh(true),300)})
-watch(sentinel,(el)=>{observer?.disconnect();if(el){observer=new IntersectionObserver(entries=>{if(entries[0].isIntersecting && !pageError.value)void loadMore()});observer.observe(el)}})
-// An intersection can arrive while another page request is loading. Recheck
-// after completion so staying at the bottom never requires an extra gesture.
-watch([loading,nextCursor], async()=>{
-  if(loading.value || !nextCursor.value || error.value || pageError.value || !['added','deleted','groups'].includes(tab.value)) return
-  await nextTick()
-  const box=sentinel.value?.getBoundingClientRect()
-  if(box && box.top<window.innerHeight && box.bottom>0) void loadMore()
+function searchEmployeesNow() {
+  clearTimeout(employeeSearchTimer)
+  if(!me.value || accessDenied.value || !['added','deleted'].includes(tab.value))return
+  const same=appliedEmployeeKeyword.value===employeeKeyword.value.trim() && !employee.value
+  employee.value='';appliedEmployeeKeyword.value=employeeKeyword.value.trim()
+  if(same)void refresh(true)
+}
+function clearEmployeeSearch() {employeeKeyword.value='';employee.value='';searchEmployeesNow()}
+watch(employeeKeyword,()=>{
+  void loadEmployees();clearTimeout(employeeSearchTimer)
+  employeeSearchTimer=setTimeout(searchEmployeesNow,300)
 })
+watch(groupSearch,()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>void refresh(true),300)})
 const dialogEl = ref<HTMLElement | null>(null)
 let previousFocus: HTMLElement | null = null
 let previousOverflow = ''
@@ -236,7 +283,7 @@ watch(detail, async (value, oldValue)=>{
     previousFocus = document.activeElement as HTMLElement
     previousOverflow = document.body.style.overflow
     document.body.style.overflow='hidden'
-    await nextTick(); dialogEl.value?.focus()
+    await nextTick(); dialogEl.value?.focus({preventScroll:true})
   } else if(!value && oldValue) {
     document.body.style.overflow=previousOverflow
     await nextTick(); previousFocus?.focus()
@@ -251,13 +298,26 @@ function dialogKey(e: KeyboardEvent) {
   if(e.shiftKey && (document.activeElement===first || document.activeElement===dialogEl.value)) {e.preventDefault();last.focus()}
   else if(!e.shiftKey && (document.activeElement===last || document.activeElement===dialogEl.value)) {e.preventDefault();first.focus()}
 }
+function updatePaginationDock() {
+  bottomNavHeight.value=Math.ceil(mobileNavEl.value?.getBoundingClientRect().height || 0)
+  const host=paginationHost.value?.getBoundingClientRect()
+  if(!host || !paginationEl.value)return
+  paginationStyle.value={left:host.left+'px',width:host.width+'px',bottom:bottomNavHeight.value+'px'}
+  paginationHeight.value=Math.ceil(paginationEl.value.getBoundingClientRect().height)
+}
+watch([paginationHost,paginationEl,mobileNavEl],()=>{
+  dockObserver?.disconnect()
+  dockObserver=new ResizeObserver(updatePaginationDock)
+  for(const element of [paginationHost.value,paginationEl.value,mobileNavEl.value])if(element)dockObserver.observe(element,{box:'border-box'})
+  updatePaginationDock()
+}, {flush:'post'})
 onMounted(async()=>{
   window.addEventListener('session-expired',expired)
   try{config.value=await api('/config');try{if(!sessionStorage.getItem('logged-out')){await loadMe();await refresh()}}catch{if(config.value.ding_configured && /DingTalk/i.test(navigator.userAgent) && !sessionStorage.getItem('logged-out'))await login()}}
   catch(e:any){error.value=e.message}
   refreshTimer=setInterval(()=>{if(me.value && tab.value==='dashboard' && !loading.value && !document.hidden)void refresh()},30000)
 })
-onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();observer?.disconnect();clearTimeout(searchTimer);clearInterval(refreshTimer);window.removeEventListener('session-expired',expired)})
+onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();dockObserver?.disconnect();clearTimeout(searchTimer);clearTimeout(employeeSearchTimer);clearInterval(refreshTimer);window.removeEventListener('session-expired',expired)})
 </script>
 
 <template>
@@ -277,7 +337,16 @@ onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();observer?.disconnect(
       <p class="login-footer">企微数据接入 · 钉钉工作台 · 主体权限隔离</p>
     </section>
   </div>
-  <div v-else class="app-shell" @touchstart.passive="pullStart" @touchend.passive="pullEnd">
+  <div v-else-if="accessDenied" class="login-shell">
+    <section class="login-card access-denied" aria-labelledby="access-title">
+      <h1 id="access-title">暂无访问权限</h1>
+      <p class="muted" role="alert">无访问权限，请联系管理员。当前账号没有可访问的主体。</p>
+      <p v-if="error" class="error">{{error}}</p>
+      <button class="primary wide" :disabled="loading" @click="refresh()">重新检查授权</button>
+      <button class="secondary wide" :disabled="busy" @click="logout">退出登录</button>
+    </section>
+  </div>
+  <div v-else class="app-shell" :style="{'--bottom-nav-height':bottomNavHeight+'px'}" @touchstart.passive="pullStart" @touchend.passive="pullEnd">
     <aside class="sidebar">
       <div class="brand"><span class="brandmark">◫</span><div>关系观察台<small>CLIENT INSIGHT</small></div></div>
       <p class="nav-label">工作空间</p>
@@ -285,7 +354,7 @@ onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();observer?.disconnect(
       <button v-if="me.role==='admin'" class="admin-nav" :class="{active:tab==='admin'}" @click="tab='admin'">⚙ 主体与权限管理</button>
       <div class="sidebar-bottom"><Avatar :name="me.name" :url="me.avatar_url" /><div><span class="sidebar-user-name" :title="me.name">{{me.name}}</span><small>{{me.role==='admin'?'管理员':'授权用户'}}</small></div><button class="text-btn" @click="logout" title="退出登录">↗</button></div>
     </aside>
-    <main>
+    <main :class="{'paged-main':['added','deleted','groups'].includes(tab)}">
       <header class="topbar"><span>工作台 <span class="slash">/</span> {{tab==='admin'?'配置管理':nav.find(n=>n.id===tab)?.name}}</span><span class="environment"><span class="dot"></span>{{config.demo_enabled?'本地演示环境':'企业工作空间'}}</span></header>
       <section class="page-heading"><div><p class="eyebrow">{{tab==='dashboard'?'OVERVIEW':'WORKSPACE'}}</p><h1>{{tab==='dashboard'?'客户关系汇总':tab==='admin'?'主体与权限管理':tab==='me'?'个人中心':tab==='groups'?'群成员变更':tab==='added'?'新增联系人':'删除联系人'}}</h1><p class="muted">{{tab==='dashboard'?'看见增长，也看见每一次流失。':tab==='admin'?'管理接入配置、访问范围与事件处理任务。':'所有记录按主体授权展示，时间统一为北京时间。'}}</p></div><button class="secondary" :disabled="loading" @click="refreshWithAvatars()">↻ {{loading?'更新中…':'刷新数据'}}</button></section>
       <div v-if="config.demo_enabled" class="demo-banner">演示模式：页面数据由本地种子生成，不代表真实企业数据或平台联调结果。</div>
@@ -297,18 +366,18 @@ onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();observer?.disconnect(
       </section>
       <template v-if="tab==='dashboard'">
         <div v-if="!dashboard && loading" class="empty">正在加载汇总…</div>
-        <template v-if="dashboard">
-          <p class="range-summary">指标与排名区间：{{dashboard.metrics_range[0]}} 至 {{dashboard.metrics_range[1]}}</p><div class="metrics"><button v-for="(card,i) in dashboard.cards" :key="card.type" class="metric" @click="cardClick(card.type)"><div class="metric-top"><span>{{labels[card.type]}}</span><span class="metric-symbol" :style="{color:eventColor(card.type)}">{{['↗','↘','↪','⊖'][Number(i)]}}</span></div><strong>{{card.value.toLocaleString()}}<small>人次</small></strong><div class="metric-footer"><span :class="card.delta>0?'up':card.delta<0?'down':'neutral'">{{card.delta>0?'↑ +':card.delta<0?'↓ ':''}}{{card.delta}}</span><span>较上一周期</span><span class="metric-arrow">↗</span></div></button></div>
+        <div v-if="dashboard" class="dashboard-content">
+          <div class="dashboard-primary"><p class="range-summary">指标与排名区间：{{dashboard.metrics_range[0]}} 至 {{dashboard.metrics_range[1]}}</p><div class="metrics"><button v-for="(card,i) in dashboard.cards" :key="card.type" class="metric" @click="cardClick(card.type)"><div class="metric-top"><span>{{labels[card.type]}}</span><span class="metric-symbol" :style="{color:eventColor(card.type)}">{{['↗','↘','↪','⊖'][Number(i)]}}</span></div><strong>{{card.value.toLocaleString()}}<small>人次</small></strong><div class="metric-footer"><span :class="card.delta>0?'up':card.delta<0?'down':'neutral'">{{card.delta>0?'↑ +':card.delta<0?'↓ ':''}}{{card.delta}}</span><span>较上一周期</span><span class="metric-arrow">↗</span></div></button></div>
           <div v-if="dashboard.unresolved_count || dashboard.pending_jobs" class="notice">有 {{dashboard.unresolved_count}} 人次属于其他群成员变更或仍待核实，未计入外部客户流失指标，{{dashboard.pending_jobs}} 个任务尚未完成。详情和指标可能继续补全。</div>
           <section class="panel trend-panel"><div class="panel-title"><div><h2>关系变化趋势</h2><p>按日查看四类事件，点击图例切换显示</p></div><span class="badge">{{dashboard.trend.length}} 天</span></div><div ref="chartEl" class="chart" aria-label="四类事件趋势图"></div><p class="chart-foot">统计区间 {{dashboard.trend_range[0]}} 至 {{dashboard.trend_range[1]}} · 截至 {{dateText(dashboard.updated_at)}}</p></section>
-          <div class="rankings"><section v-for="(type,i) in ['contact_added','contact_deleted','group_left']" :key="type" class="panel"><div class="panel-title"><h2>{{['新增客户员工','删除关系员工','主动退群群聊'][i]}} <span class="top-label">TOP 5</span></h2><button class="text-btn" @click="cardClick(type)">明细 ↗</button></div><div v-if="!dashboard.tops[type].length" class="empty small">暂无数据</div><div v-for="(r,index) in dashboard.tops[type]" :key="r.tenant_id+':'+r.id" class="rank-row"><span class="rank-number" :class="{first:index===0}">{{String(Number(index)+1).padStart(2,'0')}}</span><div class="rank-name">{{r.name}}<small>{{tenantName(r.tenant_id)}}</small><div class="rank-bar"><i :style="{width:(r.count/dashboard.tops[type][0].count*100)+'%',background:eventColor(type)}"></i></div></div><strong>{{r.count}}<small>人次</small></strong></div></section></div>
-        </template>
+          </div><div class="rankings"><section v-for="(type,i) in ['contact_added','contact_deleted','group_left']" :key="type" class="panel"><div class="panel-title"><h2>{{['新增客户员工','删除关系员工','主动退群群聊'][i]}} <span class="top-label">TOP 5</span></h2><button class="text-btn" @click="cardClick(type)">明细 ↗</button></div><div v-if="!dashboard.tops[type].length" class="empty small">暂无数据</div><div v-for="(r,index) in dashboard.tops[type]" :key="r.tenant_id+':'+r.id" class="rank-row"><span class="rank-number" :class="{first:index===0}">{{String(Number(index)+1).padStart(2,'0')}}</span><div class="rank-name"><span class="rank-label">{{r.name}}</span><small>{{tenantName(r.tenant_id)}}</small><div class="rank-bar"><i :style="{width:(r.count/dashboard.tops[type][0].count*100)+'%',background:eventColor(type)}"></i></div></div><strong>{{r.count}}<small>人次</small></strong></div></section></div>
+        </div>
       </template>
       <template v-else-if="['added','deleted','groups'].includes(tab)">
-        <section class="detail-toolbar"><div v-if="tab==='groups'" class="tabs"><button v-for="t in ['group_left','group_removed','group_change_unknown']" :class="{selected:groupType===t}" @click="groupType=t">{{labels[t]}}</button></div><label v-else>员工<input v-model="employeeKeyword" placeholder="搜索员工姓名或ID" aria-label="搜索员工"><select v-model="employee"><option value="">全部员工</option><option v-for="e in employees" :key="e.tenant_id+':'+e.id" :value="JSON.stringify([e.tenant_id,e.id])">{{e.name}} · {{tenantName(e.tenant_id)}}</option></select></label><button v-if="employeeMore && tab!=='groups'" class="text-btn" @click="loadEmployees(true)">更多员工</button><label v-if="tab==='added'">添加方式<select v-model="addWay"><option value="">全部方式</option><option value="1">扫描二维码</option><option value="2">搜索手机号</option><option value="3">名片分享</option><option value="4">群聊添加</option><option value="5">手机通讯录</option><option value="6">微信联系人</option><option value="other">其他</option><option value="unknown">未知</option></select></label><input v-if="tab==='groups'" v-model="groupSearch" placeholder="搜索群名称" aria-label="群名称搜索"><span class="muted">{{totals.records}} 条记录 · {{totals.quantity}} 人次</span></section>
+        <section class="detail-toolbar"><div v-if="tab==='groups'" class="tabs"><button v-for="t in ['group_left','group_removed','group_change_unknown']" :class="{selected:groupType===t}" @click="groupType=t">{{labels[t]}}</button></div><div v-else class="employee-filter"><form class="employee-search" @submit.prevent="searchEmployeesNow"><label>搜索员工<input v-model="employeeKeyword" type="search" maxlength="100" placeholder="输入员工姓名或ID筛选记录" aria-label="搜索员工"></label><button class="secondary" type="submit">搜索</button><button class="text-btn" type="button" @click="clearEmployeeSearch">清空</button></form><label>指定员工（可选）<select v-model="employee" aria-label="指定员工"><option value="">全部员工</option><option v-for="e in employees" :key="e.tenant_id+':'+e.id" :value="JSON.stringify([e.tenant_id,e.id])">{{e.name}} · {{tenantName(e.tenant_id)}}</option></select></label><small v-if="appliedEmployeeKeyword && !employee" class="muted">正在按“{{appliedEmployeeKeyword}}”筛选记录</small></div><button v-if="employeeMore && tab!=='groups'" class="text-btn" @click="loadEmployees(true)">更多员工</button><label v-if="tab==='added'">添加方式<select v-model="addWay"><option value="">全部方式</option><option value="1">扫描二维码</option><option value="2">搜索手机号</option><option value="3">名片分享</option><option value="4">群聊添加</option><option value="5">手机通讯录</option><option value="6">微信联系人</option><option value="other">其他</option><option value="unknown">未知</option></select></label><input v-if="tab==='groups'" v-model="groupSearch" placeholder="搜索群名称" aria-label="群名称搜索"><span class="muted">{{totals.records}} 条记录 · {{totals.quantity}} 人次</span></section>
         <p v-if="tab==='groups' && groupType==='group_change_unknown'" class="muted">这里保留内部员工变更，以及客户身份或退出原因证据不足的记录。已识别的外部客户按主动退群、被移出群分类。</p>
-        <section class="panel event-list"><div v-if="!records.length && !error" class="empty"><span>◎</span><h3>{{loading?'正在加载…':'暂无数据'}}</h3><p>调整主体或日期范围后再试</p></div><button v-for="e in records" :key="e.id" class="event-row" @click="detail=e"><div v-if="isGroupEvent(e) && hasMatchedMembers(e)" class="member-avatars"><Avatar v-for="m in e.snapshot.member_candidates.slice(0,3)" :key="m.member_id" :name="m.name" :media-id="m.media_id" /><span v-if="e.quantity>3">+{{e.quantity-3}}</span></div><Avatar v-else :name="isGroupEvent(e) ? (e.resolution==='exact' ? e.snapshot.customer_name : '?') : e.snapshot.customer_name" :media-id="!isGroupEvent(e) || e.resolution==='exact' ? e.snapshot.customer_media_id : undefined" :warm="tab==='deleted'" /><div class="event-content"><strong>{{isGroupEvent(e) ? ((e.resolution==='exact' || hasMatchedMembers(e)) ? memberNames(e) : '成员待核实') : memberNames(e)}} <span v-if="e.quantity>1" class="badge">{{e.quantity}} 人次</span></strong><p v-if="e.event_type==='contact_added'">由 {{e.snapshot.employee_name}} 添加 · {{addWayLabel(e.add_way)}}</p><p v-else-if="e.event_type==='contact_deleted'">{{e.deletion_direction==='customer_deleted_employee'?'客户删除了员工':e.deletion_direction==='employee_deleted_customer'?'员工删除了客户':'删除方向未提供'}} · {{e.snapshot.employee_name}}</p><p v-else>{{eventLabel(e)}} · {{groupName(e)}}<span v-if="e.operator_id"> · 操作人 {{e.operator_id}}</span></p><div v-if="!isGroupEvent(e)" class="employee-identity"><Avatar :name="e.snapshot.employee_name" :media-id="e.snapshot.employee_media_id" /><span>员工 · {{e.snapshot.employee_name || e.employee_id || '未提供'}}</span></div><small>{{tenantName(e.tenant_id)}}<span v-if="e.resolution!=='exact'"> · {{memberStatus(e)}}{{hasMatchedMembers(e) ? '（系统比对推断）' : ''}}</span><span v-if="e.enrichment_status!=='complete'"> · 资料待补全</span><span v-if="e.channel_state"> · 渠道 {{e.channel_state}}</span></small></div><time>{{dateText(e.occurred_at)}}</time><span class="muted">›</span></button></section>
-        <p v-if="pageError" class="error" role="alert">{{pageError}}</p><div ref="sentinel" class="load-more"><button v-if="nextCursor" class="secondary" :disabled="loading" @click="loadMore">{{loading?'加载中…':'加载更多'}}</button><span v-else-if="records.length">已显示全部记录</span></div>
+        <section ref="eventListEl" class="panel event-list" :class="{'contact-list':tab!=='groups'}"><div v-if="tab!=='groups'" class="event-columns" aria-hidden="true"><span></span><div class="event-column-main"><span>客户与关系变化</span><span>员工与主体</span></div><span>发生时间</span><span></span></div><div v-if="!records.length && !error" class="empty"><span>◎</span><h3>{{loading?'正在加载…':'暂无数据'}}</h3><p>调整主体或日期范围后再试</p></div><button v-for="e in records" :key="e.id" class="event-row" @click="detail=e"><div v-if="isGroupEvent(e) && hasMatchedMembers(e)" class="member-avatars"><Avatar v-for="m in e.snapshot.member_candidates.slice(0,3)" :key="m.member_id" :name="m.name" :media-id="m.media_id" /><span v-if="e.quantity>3">+{{e.quantity-3}}</span></div><Avatar v-else :name="isGroupEvent(e) ? (e.resolution==='exact' ? e.snapshot.customer_name : '?') : e.snapshot.customer_name" :media-id="!isGroupEvent(e) || e.resolution==='exact' ? e.snapshot.customer_media_id : undefined" :warm="tab==='deleted'" /><div class="event-content"><strong>{{isGroupEvent(e) ? ((e.resolution==='exact' || hasMatchedMembers(e)) ? memberNames(e) : '成员待核实') : memberNames(e)}} <span v-if="e.quantity>1" class="badge">{{e.quantity}} 人次</span></strong><p v-if="e.event_type==='contact_added'">由 {{e.snapshot.employee_name}} 添加 · {{addWayLabel(e.add_way)}}</p><p v-else-if="e.event_type==='contact_deleted'">{{e.deletion_direction==='customer_deleted_employee'?'客户删除了员工':e.deletion_direction==='employee_deleted_customer'?'员工删除了客户':'删除方向未提供'}} · {{e.snapshot.employee_name}}</p><p v-else>{{eventLabel(e)}} · {{groupName(e)}}<span v-if="e.operator_id"> · 操作人 {{e.operator_id}}</span></p><div v-if="!isGroupEvent(e)" class="employee-identity"><Avatar :name="e.snapshot.employee_name" :media-id="e.snapshot.employee_media_id" /><span>员工 · {{e.snapshot.employee_name || e.employee_id || '未提供'}}</span></div><small>{{tenantName(e.tenant_id)}}<span v-if="e.resolution!=='exact'"> · {{memberStatus(e)}}{{hasMatchedMembers(e) ? '（系统比对推断）' : ''}}</span><span v-if="e.enrichment_status!=='complete'"> · 资料待补全</span><span v-if="e.channel_state"> · 渠道 {{e.channel_state}}</span></small></div><time>{{dateText(e.occurred_at)}}</time><span class="muted">›</span></button></section>
+        <p v-if="pageError" class="error" role="alert">{{pageError}}</p><div ref="paginationHost" class="pagination-space"><nav ref="paginationEl" class="pagination" :style="paginationStyle" aria-label="记录分页"><span class="page-summary" role="status">第 {{pageNumber}} / {{totalPages}} 页 · 共 {{totals.records}} 条</span><label>每页<select v-model="pageSize" aria-label="每页记录数"><option value="10">10 条</option><option value="20">20 条</option><option value="50">50 条</option></select></label><div class="page-actions"><button class="secondary" :disabled="loading || pageNumber===1" @click="changePage(-1)">上一页</button><button class="secondary" :disabled="loading || !nextCursor" @click="changePage(1)">下一页</button></div></nav></div>
       </template>
       <section v-else-if="tab==='me'" class="panel profile"><Avatar :name="me.name" :url="me.avatar_url" large /><h2>{{me.name}}</h2><span class="badge">{{me.role==='admin'?'管理员':'普通用户'}}</span><h3>可访问主体</h3><div v-for="t in me.tenants" class="profile-tenant">◫ {{t.name}}</div><p v-if="!me.tenants.length" class="muted">暂无授权主体，请联系管理员。</p><button v-if="me.role==='admin'" class="secondary" @click="tab='admin'">管理主体与授权</button><button class="secondary" @click="logout">退出登录</button></section>
       <template v-else-if="tab==='admin'">
@@ -317,12 +386,13 @@ onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();observer?.disconnect(
         <section class="panel admin-panel"><h2>最近处理任务</h2><p class="muted">最多显示最近 100 条。失败任务在修复配置后可重新排队。</p><div v-if="!jobs.length" class="empty small">暂无处理任务</div><div v-for="j in jobs" class="job-row"><span>#{{j.id}} · 主体 {{j.tenant_id}}</span><span class="badge">{{j.status}}</span><span>{{j.attempts}} 次尝试</span><code>{{j.last_error}}</code><button v-if="['failed','retry'].includes(j.status)" class="secondary" :disabled="busy" @click="mutation('/admin/jobs/'+j.id+'/retry',{})">重试</button></div></section>
       </template>
       <footer class="page-footer">关系观察台 <span>数据按北京时间统计 · 每 30 秒更新汇总</span></footer>
+      <div v-if="['added','deleted','groups'].includes(tab)" class="pagination-reserve" :style="{height:paginationHeight+'px'}" aria-hidden="true"></div>
     </main>
-    <nav class="mobile-nav"><button v-for="n in nav" :key="n.id" :class="{active:tab===n.id}" @click="tab=n.id"><NavIcon :name="n.id" />{{n.name}}</button></nav>
+    <nav ref="mobileNavEl" class="mobile-nav"><button v-for="n in nav" :key="n.id" :class="{active:tab===n.id}" @click="tab=n.id"><NavIcon :name="n.id" />{{n.name}}</button></nav>
     <div v-if="detail" class="modal-backdrop" @click.self="detail=null">
       <section ref="dialogEl" class="modal" tabindex="-1" @keydown="dialogKey" role="dialog" aria-modal="true" aria-label="事件详情">
-        <button class="close" @click="detail=null" aria-label="关闭">×</button>
-        <p class="eyebrow">EVENT DETAIL</p><h2>{{eventLabel(detail)}}</h2>
+        <header class="modal-header"><h2>{{eventLabel(detail)}}</h2><button class="close" @click="detail=null" aria-label="关闭">×</button></header>
+        <div class="modal-body">
         <dl>
           <dt>所属主体</dt><dd>{{tenantName(detail.tenant_id)}}</dd>
           <dt>发生时间</dt><dd>{{dateText(detail.occurred_at)}}</dd>
@@ -363,6 +433,7 @@ onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();observer?.disconnect(
         <p v-if="isGroupEvent(detail)" :class="detail.event_type==='group_change_unknown' && !hasMatchedMembers(detail)?'notice':'muted'">{{groupClassificationNote(detail)}}</p>
         <p v-else-if="detail.snapshot.note" class="notice">{{detail.snapshot.note}}</p>
         <p v-if="detail.snapshot.demo" class="notice">此条为模拟演示数据。</p>
+        </div>
       </section>
     </div>
   </div>

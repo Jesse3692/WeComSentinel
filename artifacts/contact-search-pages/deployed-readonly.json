@@ -1,0 +1,2 @@
+{"method": "production read-only handler invocation, real data; not authenticated HTTP or DingTalk client", "results": {"contact_added": {"total": 3, "name_search_matches": 3, "id_search_matches": 3, "impossible_search_matches": 0, "read_only_pages_at_limit_1": 3, "unique_complete_and_previous_stable": true}, "contact_deleted": {"total": 1, "name_search_matches": 1, "id_search_matches": 1, "impossible_search_matches": 0, "read_only_pages_at_limit_1": 1, "unique_complete_and_previous_stable": true}}}
+
