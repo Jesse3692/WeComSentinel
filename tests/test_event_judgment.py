@@ -40,6 +40,9 @@ async def test_group_retry_keeps_original_baseline_and_recovers(system, first):
                 raise PlatformError("platform_transport_error")
             return {"member_list": old}
         return {"name": "群", "member_list": old[1:]}
+    async def customer(*args):
+        return {"external_contact": {"name": "群中姓名", "type": 1}}
+    app.state.platforms.customer = customer
     app.state.platforms.group = group
     await submit(app, group_payload())
     async with app.state.sessions() as db:

@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select, union
 
 from .models import Audit, BusinessEvent, Grant, Job, Media, Profile, Session, Tenant, User, now_ms
 from .platforms import PlatformError
@@ -213,7 +213,8 @@ async def dashboard(tenant_id: str = "all", start_date: date | None = None, end_
         return dict(rows)
     current, previous = await counts(start, end), await counts(start - (end - start), start)
     # No explicit range means near 30 days for the chart; chosen ranges apply to all widgets.
-    tf, tl, ts, te = period(start_date, end_date, days=30)
+    tf, tl, ts, te = (period(end_date=last, days=30) if start_date is None and end_date is None
+                      else (first, last, start, end))
     day_expr = func.strftime("%Y-%m-%d", BusinessEvent.occurred_at / 1000, "unixepoch", "+8 hours")
     rows = (await db.execute(select(day_expr, BusinessEvent.event_type, func.sum(BusinessEvent.quantity))
             .where(base, BusinessEvent.occurred_at >= ts, BusinessEvent.occurred_at < te)
@@ -253,7 +254,7 @@ async def events(request: Request, tenant_id: str = "all", start_date: date | No
                  cursor: str | None = Query(None, max_length=4096), limit: int = Query(20, ge=1, le=100),
                  user=Depends(identity), db=Depends(database)):
     ids = await allowed(db, user, tenant_id)
-    _, _, start, end = period(start_date, end_date)
+    first, last, start, end = period(start_date, end_date)
     filters = [BusinessEvent.tenant_id.in_(ids), BusinessEvent.occurred_at >= start, BusinessEvent.occurred_at < end]
     if event_type:
         if event_type not in TYPES + ["group_change_unknown"]:
@@ -273,7 +274,12 @@ async def events(request: Request, tenant_id: str = "all", start_date: date | No
         else:
             filters.append(BusinessEvent.add_way == add_way)
     if group_keyword:
-        filters.append(func.instr(func.json_extract(BusinessEvent.snapshot, "$.group_name"), group_keyword) > 0)
+        current_name = select(func.json_extract(Profile.data, "$.name")).where(
+            Profile.tenant_id == BusinessEvent.tenant_id, Profile.kind == "group",
+            Profile.external_id == BusinessEvent.group_id).correlate(BusinessEvent).scalar_subquery()
+        effective_name = func.coalesce(func.nullif(func.json_extract(
+            BusinessEvent.snapshot, "$.group_name"), ""), current_name)
+        filters.append(func.instr(effective_name, group_keyword) > 0)
     fingerprint = digest(json.dumps([ids, start, end, event_type, employee_id, employee_tenant_id, add_way, group_keyword, user.id]))
     upper = await db.scalar(select(func.coalesce(func.max(BusinessEvent.id), 0)))
     page_filter = []
@@ -293,11 +299,12 @@ async def events(request: Request, tenant_id: str = "all", start_date: date | No
                             .order_by(BusinessEvent.occurred_at.desc(), BusinessEvent.id.desc()).limit(limit + 1))).all()
     next_cursor = None
     if len(rows) > limit:
-        last = rows[limit - 1]
-        next_cursor = encode_cursor({"upper": upper, "filter": fingerprint, "time": last.occurred_at, "id": last.id},
+        last_row = rows[limit - 1]
+        next_cursor = encode_cursor({"upper": upper, "filter": fingerprint, "time": last_row.occurred_at, "id": last_row.id},
                                     request.app.state.settings.secret_key)
     return result({"items": await event_details(db, rows[:limit]), "next_cursor": next_cursor,
-                   "total_records": total, "total_quantity": quantity})
+                   "total_records": total, "total_quantity": quantity,
+                   "range": [first.isoformat(), last.isoformat()]})
 
 
 @router.get("/api/v1/events/{event_id}")
@@ -312,11 +319,28 @@ async def event_detail(event_id: int, user=Depends(identity), db=Depends(databas
 @router.get("/api/v1/employees")
 @router.get("/api/v1/groups")
 async def options(request: Request, tenant_id: str = "all", keyword: str = Query("", max_length=100),
+                  offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500),
                   user=Depends(identity), db=Depends(database)):
     ids = await allowed(db, user, tenant_id)
     kind = "employee" if request.url.path.endswith("employees") else "group"
+    if kind == "employee":
+        identities = union(
+            select(Profile.tenant_id, Profile.external_id.label("employee_id")).where(
+                Profile.tenant_id.in_(ids), Profile.kind == "employee"),
+            select(BusinessEvent.tenant_id, BusinessEvent.employee_id).where(
+                BusinessEvent.tenant_id.in_(ids), BusinessEvent.employee_id.is_not(None))
+        ).subquery()
+        display = func.coalesce(func.nullif(func.nullif(Profile.name, ""), "未知"), identities.c.employee_id)
+        query = select(identities.c.tenant_id, identities.c.employee_id, display.label("name")).outerjoin(
+            Profile, and_(Profile.tenant_id == identities.c.tenant_id, Profile.kind == "employee",
+                          Profile.external_id == identities.c.employee_id)).where(
+            or_(func.instr(display, keyword) > 0, func.instr(identities.c.employee_id, keyword) > 0)
+        ).order_by(display, identities.c.tenant_id, identities.c.employee_id).offset(offset).limit(limit)
+        rows = (await db.execute(query)).all()
+        return result([{"id": r.employee_id, "tenant_id": r.tenant_id, "name": r.name} for r in rows])
     rows = (await db.scalars(select(Profile).where(Profile.tenant_id.in_(ids), Profile.kind == kind,
-                            func.instr(Profile.name, keyword) > 0).order_by(Profile.name).limit(500))).all()
+                            func.instr(Profile.name, keyword) > 0).order_by(
+                                Profile.name, Profile.tenant_id, Profile.external_id).offset(offset).limit(limit))).all()
     return result([{"id": r.external_id, "tenant_id": r.tenant_id, "name": r.name} for r in rows])
 
 

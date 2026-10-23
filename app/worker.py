@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 import random
+from copy import deepcopy
 
 from cryptography.fernet import Fernet
 from sqlalchemy import and_, delete, or_, select, update
@@ -104,24 +105,74 @@ class Worker:
             return await db.scalar(select(Profile).where(Profile.tenant_id == tenant_id,
                                    Profile.kind == kind, Profile.external_id == external_id))
 
-    async def put_profile(self, tenant_id, kind, external_id, data):
+    async def put_profile(self, tenant_id, kind, external_id, data, synced_at=None):
         async with self.sessions() as db:
             row = await db.scalar(select(Profile).where(Profile.tenant_id == tenant_id,
                                   Profile.kind == kind, Profile.external_id == external_id))
             if row is None:
                 row = Profile(tenant_id=tenant_id, kind=kind, external_id=external_id)
                 db.add(row)
+            if row.id is not None and kind == "group" and synced_at is not None:
+                await db.execute(update(Profile).where(Profile.id == row.id, Profile.synced_at <= synced_at).values(
+                    name=data.get("name") or "未知", data=data, synced_at=synced_at))
+                await db.commit()
+                return
             row.name = data.get("name") or "未知"
             row.data = data
-            row.synced_at = now_ms()
+            row.synced_at = synced_at if synced_at is not None else now_ms()
             await db.commit()
+
+    async def sync_group(self, tenant, chat_id, detail=None, sampled_at=None):
+        """Persist membership before bounded prefetch; never create business events."""
+        if detail is None:
+            detail = await self.platforms.group(tenant, chat_id)
+        sampled_at = sampled_at if sampled_at is not None else now_ms()
+        detail = deepcopy(detail)
+        previous = await self.cached(tenant.id, "group", chat_id)
+        old_members = {(m.get("userid"), str(m.get("type"))): m for m in
+                       (previous.data.get("member_list", []) if previous else [])}
+        for member in detail.get("member_list", []):
+            old = old_members.get((member.get("userid"), str(member.get("type"))), {})
+            if not member.get("media_id") and old.get("media_id"):
+                member["media_id"] = old["media_id"]
+        await self.put_profile(tenant.id, "group", chat_id, detail, synced_at=sampled_at)
+        semaphore = asyncio.Semaphore(3)
+        complete = True
+
+        async def cache_member(member):
+            nonlocal complete
+            kind = {"1": "employee", "2": "customer"}.get(str(member.get("type")))
+            identity = member.get("userid")
+            if not kind or not identity:
+                return
+            async with semaphore:
+                try:
+                    data, ok = await self.get_profile(tenant, kind, identity)
+                    media_id = data.get("media_id") or member.get("media_id")
+                    if media_id:
+                        member["media_id"] = media_id
+                    member["avatar_state"] = "retry" if not ok else "stored" if media_id else "not_provided"
+                    if not ok:
+                        complete = False
+                except (PlatformError, OSError, ValueError):
+                    member["avatar_state"] = "retry"
+                    complete = False
+        try:
+            # Leave time for persisting partial progress inside the worker lease.
+            async with asyncio.timeout(80):
+                await asyncio.gather(*(cache_member(m) for m in detail.get("member_list", [])))
+        except TimeoutError:
+            complete = False
+        # Preserve the capture timestamp, not the end of slow avatar downloads.
+        await self.put_profile(tenant.id, "group", chat_id, detail, synced_at=sampled_at)
+        return detail, complete
 
     async def get_profile(self, tenant, kind, external_id, force=False):
         cached = await self.cached(tenant.id, kind, external_id)
         if not external_id:
             return {}, False
         if cached and not force and cached.synced_at > now_ms() - 300_000:
-            if not cached.data.get("avatar") or cached.data.get("media_id"):
+            if not cached.data.get("avatar_refresh_pending") and (not cached.data.get("avatar") or cached.data.get("media_id")):
                 return cached.data, True
         try:
             if kind == "employee":
@@ -129,20 +180,48 @@ class Worker:
             else:
                 result = await self.platforms.customer(tenant, external_id)
                 result = {**result["external_contact"], "follow_user": result.get("follow_user", [])}
+            # Preserve usable historical fields for the same tenant/kind/identity.
+            # Relationship data must remain fresh, never merge old follow_user here.
+            previous = cached.data if cached else {}
+            for field in ("name", "type", "gender", "corp_name"):
+                if result.get(field) is None or result.get(field) == "":
+                    if field in previous:
+                        result[field] = previous[field]
             url = result.get("avatar")
-            if url:
-                # An avatar failure must not discard an already identified person's name/ID.
+            media_id = previous.get("media_id")
+            pending = False
+            if url and (url != previous.get("avatar") or not media_id or previous.get("avatar_refresh_pending")):
                 try:
-                    result["media_id"] = await save_avatar(self.settings, self.sessions, tenant.id, url)
+                    downloaded = await save_avatar(self.settings, self.sessions, tenant.id, url)
                 except (PlatformError, OSError, ValueError):
-                    result["sync_error"] = "avatar_unavailable"
+                    downloaded = None
+                pending = not bool(downloaded)
+                media_id = downloaded or media_id
+            if media_id:
+                result["media_id"] = media_id
+            if pending:
+                result["sync_error"] = "avatar_unavailable"
+                result["avatar_refresh_pending"] = True
             await self.put_profile(tenant.id, kind, external_id, result)
-            return result, not url or bool(result.get("media_id"))
+            return result, not pending
         except PlatformError as exc:
             # A removed relationship may no longer be accessible. A snapshot is valid historical data.
             if cached:
-                complete = not cached.data.get("avatar") or bool(cached.data.get("media_id"))
-                return {**cached.data, "sync_error": str(exc)}, complete
+                # A departed contact may no longer be readable, but its historical
+                # Tencent avatar URL can still be valid and safely downloaded.
+                data = dict(cached.data)
+                if data.get("avatar") and (not data.get("media_id") or data.get("avatar_refresh_pending")):
+                    try:
+                        downloaded = await save_avatar(self.settings, self.sessions, tenant.id, data["avatar"])
+                    except (PlatformError, OSError, ValueError):
+                        downloaded = None
+                    if downloaded:
+                        data["media_id"] = downloaded
+                        data.pop("avatar_refresh_pending", None)
+                        data.pop("sync_error", None)
+                        await self.put_profile(tenant.id, kind, external_id, data)
+                complete = not data.get("avatar_refresh_pending") and (not data.get("avatar") or bool(data.get("media_id")))
+                return {**data, "sync_error": str(exc), "refresh_failed": force}, complete and not force
             return {"sync_error": str(exc)}, False
 
     async def write_events(self, tenant_id, callback_id, records, replace_group=False):
@@ -204,7 +283,18 @@ class Worker:
                 removed = old.keys() - new.keys()
                 count = max(1, int(payload.get("MemChangeCnt", "1")))
                 snapshot["member_evidence"] = "snapshot_difference_inconclusive"
-                if len(removed) == count and not (new.keys() - old.keys()):
+                reported = payload.get("MemChangeList")
+                # Only compare complete textual IDs; never interpret nicknames or
+                # the empty dictionaries persisted by the legacy XML parser as IDs.
+                textual = isinstance(reported, list) and reported and all(isinstance(x, str) for x in reported)
+                compatible = True
+                if textual:
+                    snapshot["reported_member_ids"] = list(reported)
+                    compatible = (len(reported) == count and len(set(reported)) == count
+                                  and all(reported) and set(reported) == removed)
+                    if not compatible:
+                        snapshot["member_evidence"] = "callback_snapshot_conflict"
+                if len(removed) == count and not (new.keys() - old.keys()) and compatible:
                     for member_id in sorted(removed):
                         member = old[member_id]
                         member_type = str(member.get("type", ""))
@@ -217,19 +307,22 @@ class Worker:
                             "member_type": int(member_type) if member_type in ("1", "2") else None,
                             "customer_type": data.get("type") if kind == "customer" else None,
                             "gender": data.get("gender"), "company_name": data.get("corp_name"),
-                            "media_id": data.get("media_id"),
+                            "media_id": data.get("media_id") or member.get("media_id"),
                         })
                     snapshot["member_evidence"] = "snapshot_difference"
         # Missing profile fields do not invalidate the member difference. Retry enrichment
         # using retained IDs, without trying to infer the removed members again.
         for member in snapshot.get("member_candidates", []):
             kind = {1: "employee", 2: "customer"}.get(member.get("member_type"))
-            if kind and member.get("member_id") and not member.get("name"):
-                data, _ = await self.get_profile(tenant, kind, member["member_id"])
+            if kind and member.get("member_id") and (not member.get("name") or not member.get("media_id") or member.get("avatar_state") == "retry"):
+                data, complete = await self.get_profile(tenant, kind, member["member_id"])
                 member["name"] = data.get("name") or member.get("name")
+                member["avatar_state"] = "retry" if not complete else "stored" if (data.get("media_id") or member.get("media_id")) else "not_provided"
+                member["media_id"] = data.get("media_id") or member.get("media_id")
                 if kind == "customer":
-                    member.update(customer_type=data.get("type"), gender=data.get("gender"),
-                                  company_name=data.get("corp_name"), media_id=data.get("media_id"))
+                    for target, source in (("customer_type", "type"), ("gender", "gender"), ("company_name", "corp_name")):
+                        if data.get(source) is not None and data.get(source) != "":
+                            member[target] = data[source]
         return snapshot
 
     async def normalize(self, tenant, inbox, payload):
@@ -247,8 +340,13 @@ class Worker:
             if not employee_id or not customer_id:
                 raise PlatformError("contact_identity_fields_missing")
             employee, ok1 = await self.get_profile(tenant, "employee", employee_id)
-            customer, ok2 = await self.get_profile(tenant, "customer", customer_id)
+            customer, ok2 = await self.get_profile(tenant, "customer", customer_id, force=change == "add_external_contact")
             relation = next((r for r in customer.get("follow_user", []) if r.get("userid") == employee_id), {})
+            if change == "add_external_contact" and customer.get("refresh_failed"):
+                relation = {}
+            if change == "add_external_contact" and "add_way" not in relation:
+                ok2 = False
+                customer["sync_error"] = "customer_relation_add_way_missing"
             direction = {"del_external_contact": "employee_deleted_customer",
                          "del_follow_user": "customer_deleted_employee"}.get(change)
             await self.write_events(tenant.id, inbox.id, [{
@@ -280,9 +378,11 @@ class Worker:
                 raise PlatformError("group_chat_id_missing")
             previous = await self.cached(tenant.id, "group", chat_id)
             current = None
+            sampled_at = None
             group_error = None
             try:
                 current = await self.platforms.group(tenant, chat_id)
+                sampled_at = now_ms()
             except PlatformError as exc:
                 group_error = str(exc)
             if change == "update" and payload.get("UpdateDetail") == "del_member":
@@ -296,13 +396,19 @@ class Worker:
                 await self.write_events(tenant.id, inbox.id,
                     group_records(snapshot, quantity, occurred, chat_id), replace_group=True)
             if current:
-                await self.put_profile(tenant.id, "group", chat_id, current)
+                if change == "create" or (change == "update" and payload.get("UpdateDetail") == "add_member"):
+                    _, complete = await self.sync_group(tenant, chat_id, current, sampled_at)
+                    if not complete:
+                        raise PlatformError("group_member_avatar_incomplete")
+                else:
+                    await self.put_profile(tenant.id, "group", chat_id, current, synced_at=sampled_at)
             if group_error and change != "dismiss":
                 raise PlatformError(group_error)
             if change == "update" and payload.get("UpdateDetail") == "del_member":
                 if snapshot.get("member_evidence") in ("current_snapshot_unavailable", "snapshot_difference_inconclusive"):
                     raise PlatformError("group_snapshot_not_conclusive")
-                if any(not m.get("name") for m in snapshot.get("member_candidates", [])):
+                if any(not m.get("name") or m.get("avatar_state") == "retry"
+                       for m in snapshot.get("member_candidates", [])):
                     raise PlatformError("group_member_profile_incomplete")
             return True
         return True

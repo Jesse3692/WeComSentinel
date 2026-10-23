@@ -106,8 +106,9 @@ async def sync_profiles(s, args):
         while True:
             groups = await platforms.wecom(tenant, "externalcontact/groupchat/list", "POST", body={"limit": 100, "cursor": cursor})
             for group in groups.get("group_chat_list", []):
-                detail = await platforms.group(tenant, group["chat_id"])
-                await worker.put_profile(tenant.id, "group", group["chat_id"], detail)
+                _, complete = await worker.sync_group(tenant, group["chat_id"])
+                if not complete:
+                    print("Group membership saved; some member avatars remain unavailable. Rerun sync to retry.")
             cursor = groups.get("next_cursor", "")
             if not cursor:
                 break

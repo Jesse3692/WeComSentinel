@@ -22,7 +22,13 @@ def parse_xml(value: bytes | str) -> dict:
     result = {}
     for child in root:
         if len(child):
-            result[child.tag] = [dict((x.tag, x.text or "") for x in item) for item in child]
+            # MemChangeList/Item contains CDATA text, not nested key/value pairs.
+            # Preserve the exact member identifiers instead of producing [{}].
+            if child.tag == "MemChangeList":
+                result[child.tag] = [item.text or "" if not len(item) else
+                                     dict((x.tag, x.text or "") for x in item) for item in child]
+            else:
+                result[child.tag] = [dict((x.tag, x.text or "") for x in item) for item in child]
         else:
             result[child.tag] = child.text or ""
     return result

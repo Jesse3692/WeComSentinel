@@ -232,7 +232,7 @@ async def test_group_snapshot_classifies_known_external_contact_without_claiming
         assert row.snapshot["member_candidates"] == [{
             "member_id": "customer1",
             "name": "已知客户", "member_type": 2, "customer_type": 1, "gender": 2,
-            "company_name": "客户企业", "media_id": None,
+            "company_name": "客户企业", "media_id": None, "avatar_state": "not_provided",
         }]
         assert row.customer_id is None and row.operator_id is None
         assert row.event_type == "group_removed" and row.resolution == "inferred"

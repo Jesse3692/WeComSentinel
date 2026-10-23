@@ -55,7 +55,7 @@ def group_records(snapshot, quantity, occurred_at, group_id):
         details["classification_reason"] = classification_reason
         details["counted_as_customer"] = event_type in ("group_left", "group_removed")
         complete = bool(details.get("group_name") and selected and all(
-            m.get("name") and m.get("member_type") in (1, 2) for m in selected))
+            m.get("name") and m.get("member_type") in (1, 2) and m.get("avatar_state") != "retry" for m in selected))
         return {"item_key": key, "event_type": event_type, "occurred_at": occurred_at,
                 "group_id": group_id, "quantity": count,
                 "resolution": "inferred" if members is not None else "unresolved",

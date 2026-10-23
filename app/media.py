@@ -8,13 +8,30 @@ from sqlalchemy import select
 from .models import Media
 
 
-async def save_avatar(settings, sessions, tenant_id, url):
-    """Only Tencent image origins, no redirects or caller-provided arbitrary URLs."""
-    parsed = urlparse(url)
-    host = (parsed.hostname or "").lower()
-    if parsed.scheme != "https" or parsed.username or parsed.port not in (None, 443):
+def normalize_avatar_url(url):
+    """Upgrade only allowlisted Tencent HTTP origins; never fetch HTTP or redirects."""
+    try:
+        if not isinstance(url, str) or any(ord(c) <= 32 for c in url) or "\\" in url:
+            return None
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        if parsed.username is not None or parsed.password is not None:
+            return None
+        if not any(host == d or host.endswith("." + d) for d in ("qpic.cn", "qlogo.cn")):
+            return None
+        if parsed.scheme not in ("http", "https"):
+            return None
+        if parsed.port not in (None, 80 if parsed.scheme == "http" else 443):
+            return None
+        return parsed._replace(scheme="https", netloc=host, fragment="").geturl()
+    except ValueError:
         return None
-    if not any(host == d or host.endswith("." + d) for d in ("qpic.cn", "qlogo.cn")):
+
+
+async def save_avatar(settings, sessions, tenant_id, url):
+    """Only Tencent image origins, HTTPS transport, no redirects."""
+    url = normalize_avatar_url(url)
+    if not url:
         return None
     try:
         async with httpx.AsyncClient(timeout=8, follow_redirects=False, trust_env=False) as client:

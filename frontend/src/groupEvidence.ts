@@ -66,6 +66,7 @@ export function memberReason(row: Row): string {
   const reasons: Record<string, string> = {
     no_before_snapshot: '缺少事件发生前的群成员快照，无法比对离群成员',
     current_snapshot_unavailable: '事件后的群成员列表尚未获取成功，等待重试',
+    callback_snapshot_conflict: '回调成员标识与群快照差异不一致，不能唯一关联具体成员',
     snapshot_difference_inconclusive: '成员差异与回调人数不一致，或期间有成员加入，无法唯一关联',
   }
   return reasons[row.snapshot?.member_evidence] || '此记录未保存可关联的成员标识或快照证据'

@@ -1066,3 +1066,6 @@ button:focus-visible,input:focus-visible,select:focus-visible {outline:3px solid
  .mobile-nav button {font-size:12px;min-height:44px} .chart {height:290px}
 }
 @media(prefers-reduced-motion:reduce) {* {transition:none!important}}
+
+.member-avatars {display:flex;align-items:center;gap:4px;flex-wrap:wrap;max-width:128px}
+.member-avatars .avatar {width:32px;height:32px}

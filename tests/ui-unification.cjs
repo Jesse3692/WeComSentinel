@@ -10,7 +10,7 @@ let lastQuery='';await page.route('**/api/v1/**',async route=>{const u=new URL(r
 if(u.pathname.endsWith('/config')) data={demo_enabled:true,ding_configured:false};
 else if(u.pathname.endsWith('/me'))data={name:'演示管理员',role:'admin',csrf_token:'local-test',tenants};
 else if(u.pathname.endsWith('/dashboard')){await new Promise(r=>setTimeout(r,150));data=dashboard}
-else if(u.pathname.endsWith('/events')){lastQuery=u.search;data={items:[{...event,event_type:u.searchParams.get('event_type')}],total_records:1,total_quantity:1,next_cursor:null}}
+else if(u.pathname.endsWith('/events')){lastQuery=u.search;data={items:[{...event,event_type:u.searchParams.get('event_type')}],total_records:1,total_quantity:1,next_cursor:null,range:['2026-10-17','2026-10-23']}}
 else if(u.pathname.endsWith('/employees'))data=[{id:'employee',tenant_id:1,name:'李顾问'}];
 else if(u.pathname.includes('/admin/'))data=[];
 await route.fulfill({json:{data}})});
