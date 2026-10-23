@@ -1,3 +1,4 @@
+const artifactDir=process.env.UI_ARTIFACT_DIR || 'artifacts/navigation';
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE);
 const assert=require('node:assert/strict');const fs=require('node:fs');
 (async()=>{const browser=await chromium.launch({headless:true,channel:'msedge'});try{
@@ -15,7 +16,7 @@ else if(u.pathname.endsWith('/employees'))data=[{id:'employee',tenant_id:1,name:
 else if(u.pathname.includes('/admin/'))data=[];
 await route.fulfill({json:{data}})});
 
-fs.mkdirSync('artifacts/navigation',{recursive:true});
+fs.mkdirSync(artifactDir,{recursive:true});
 await page.goto('http://localhost:8000');await page.locator('.metric').first().waitFor();
 const expected=['汇总','新增','删除','群变更','我的'];
 let desktopPaths;
@@ -35,9 +36,9 @@ for(const width of [1440,900,375,390,428]) {
   assert.equal(await nav.locator('button.active').count(),1);
   assert.equal(await nav.locator('button').nth(index).getAttribute('class'),'active');
  }
- await page.screenshot({path:`artifacts/navigation/navigation-${width}.png`,fullPage:true});
- if(width===1440)await page.locator('.sidebar').screenshot({path:'artifacts/navigation/sidebar.png'});
- if(width===390)await nav.screenshot({path:'artifacts/navigation/mobile-nav.png'});
+ await page.screenshot({path:`${artifactDir}/navigation-${width}.png`,fullPage:true});
+ if(width===1440)await page.locator('.sidebar').screenshot({path:`${artifactDir}/sidebar.png`});
+ if(width===390)await nav.screenshot({path:`${artifactDir}/mobile-nav.png`});
 }
 assert.deepEqual(errors,[]);
 console.log('PASS: five SVG icons, labels, shared paths, selection and overflow at 1440/900/375/390/428px (mock API)');

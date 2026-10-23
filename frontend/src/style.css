@@ -205,8 +205,20 @@ a {
   color:var(--text-secondary);
   margin-top:5px
 }
+.sidebar-bottom>div:not(.avatar) {
+  min-width:0;
+  flex:1;
+  overflow-wrap:anywhere
+}
+.sidebar-user-name {
+  display:-webkit-box;
+  -webkit-box-orient:vertical;
+  -webkit-line-clamp:2;
+  overflow:hidden
+}
 .sidebar-bottom .text-btn {
-  margin-left:auto
+  margin-left:auto;
+  flex-shrink:0
 }
 .avatar {
   background:var(--bg-subtle);
@@ -436,6 +448,7 @@ main {
   margin-top:22px
 }
 .rank-number {
+  flex-shrink:0;
   font-size:13px;
   color:var(--text-secondary)
 }
@@ -445,7 +458,8 @@ main {
 .rank-name {
   flex:1;
   font-size:12px;
-  min-width:0
+  min-width:0;
+  overflow-wrap:anywhere
 }
 .rank-name small {
   display:block;
@@ -467,6 +481,7 @@ main {
   border-radius:4px
 }
 .rank-row strong {
+  flex-shrink:0;
   font-size:17px;
   font-weight:500
 }
@@ -594,7 +609,9 @@ main {
 .profile {
   max-width:650px;
   text-align:center;
-  margin:30px auto
+  margin:30px auto;
+  min-width:0;
+  overflow-wrap:anywhere
 }
 .profile h2 {
   margin:15px
