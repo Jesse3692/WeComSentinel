@@ -1,0 +1,18 @@
+:root {
+  /* 品牌与主操作 */
+  --brand-primary: #1677ff;      /* 稳定蓝，适合常规主按钮 */
+  --brand-ai: #7b5cff;           /* 紫色，适合 AI/智能能力 */
+  --brand-gradient: linear-gradient(135deg, #1677ff, #7b5cff);
+
+  /* 中性色 */
+  --bg-page: #f5f6f7;
+  --bg-card: #ffffff;
+  --text-primary: #171a1d;
+  --text-secondary: #646a73;
+  --border: #e5e6eb;
+
+  /* 状态色 */
+  --success: #00b42a;
+  --warning: #ff7d00;
+  --danger: #f53f3f;
+}

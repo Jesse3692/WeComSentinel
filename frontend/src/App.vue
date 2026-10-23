@@ -6,6 +6,7 @@ import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/compon
 import { CanvasRenderer } from 'echarts/renderers'
 import { api, setCSRF } from './api'
 import Avatar from './Avatar.vue'
+import { eventColor, chartColors, themeColor } from './theme/chart'
 import { hasMatchedMembers, memberStatus, memberNames, memberReason, groupEventLabel, groupClassificationNote, groupEvidenceText } from './groupEvidence'
 echarts.use([LineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
 
@@ -23,7 +24,7 @@ let chart: echarts.ECharts | undefined, resize: ResizeObserver | undefined, obse
 let version = 0, searchTimer: ReturnType<typeof setTimeout>, touchStart = 0, refreshTimer: ReturnType<typeof setInterval>
 const labels: Record<string, string> = {contact_added:'新增联系人', contact_deleted:'删除联系人', group_left:'主动退群', group_removed:'被移出群', group_change_unknown:'其他 / 待核实'}
 const nav = [{id:'dashboard', name:'总览', symbol:'◫'}, {id:'added', name:'新增', symbol:'＋'}, {id:'deleted', name:'删除', symbol:'−'}, {id:'groups', name:'群变更', symbol:'◎'}, {id:'me', name:'我的', symbol:'◉'}]
-const colors = ['#206a58', '#cf7945', '#677cbb', '#bd6480']
+const colors = chartColors()
 const types = ['contact_added','contact_deleted','group_left','group_removed']
 const addWayLabel = (value: string | null) => ({'1':'扫描二维码','2':'搜索手机号','3':'名片分享','4':'群聊添加','5':'手机通讯录','6':'微信联系人'}[value || ''] || (value?'其他方式':'方式未知'))
 const dateText = (value: number) => new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(value)
@@ -72,13 +73,15 @@ async function logout() {
 async function drawChart() {
   await nextTick()
   if(!chartEl.value || !dashboard.value || tab.value !== 'dashboard') return
-  chart?.dispose(); resize?.disconnect(); chart = echarts.init(chartEl.value)
+  if (!chart || chart.isDisposed() || chart.getDom() !== chartEl.value) {
+    chart?.dispose(); resize?.disconnect(); chart = echarts.init(chartEl.value)
+    resize = new ResizeObserver(()=>chart?.resize()); resize.observe(chartEl.value)
+  }
   const data = dashboard.value.trend
-  chart.setOption({color:colors, tooltip:{trigger:'axis'}, legend:{bottom:0,icon:'circle',textStyle:{color:'#667571'}},
-    grid:{left:38,right:18,top:20,bottom:58}, xAxis:{type:'category',boundaryGap:false,data:data.map((d:AnyRow)=>d.date.slice(5)),axisLine:{lineStyle:{color:'#e5ebe7'}},axisTick:{show:false},axisLabel:{color:'#88938f'}},
-    yAxis:{type:'value',minInterval:1,splitLine:{lineStyle:{color:'#edf0ed'}},axisLabel:{color:'#88938f'}},
+  chart.setOption({color:colors, tooltip:{trigger:'axis'}, legend:{bottom:0,icon:'circle',textStyle:{color:themeColor('--text-secondary')}},
+    grid:{left:38,right:18,top:20,bottom:window.innerWidth<=760?88:58}, xAxis:{type:'category',boundaryGap:false,data:data.map((d:AnyRow)=>d.date.slice(5)),axisLine:{lineStyle:{color:themeColor('--border')}},axisTick:{show:false},axisLabel:{color:themeColor('--text-secondary')}},
+    yAxis:{type:'value',minInterval:1,splitLine:{lineStyle:{color:themeColor('--border')}},axisLabel:{color:themeColor('--text-secondary')}},
     series:types.map((t,i)=>({name:labels[t],type:'line',smooth:true,showSymbol:false,lineStyle:{width:2.5},areaStyle:i===0?{opacity:.05}:undefined,data:data.map((d:AnyRow)=>d[t])}))})
-  resize = new ResizeObserver(()=>chart?.resize()); resize.observe(chartEl.value)
 }
 async function fetchRecords(more = false, currentVersion = version) {
   const eventType = tab.value==='added'?'contact_added':tab.value==='deleted'?'contact_deleted':groupType.value
@@ -95,16 +98,16 @@ async function fetchRecords(more = false, currentVersion = version) {
   records.value=more?[...records.value,...data.items]:data.items
   nextCursor.value=data.next_cursor; totals.value={records:data.total_records,quantity:data.total_quantity}
 }
-async function refresh() {
+async function refresh(reset = false) {
   if(!me.value) return
-  const currentVersion=++version; loading.value=true;error.value=''; detail.value=null
+  const currentVersion=++version; loading.value=true;error.value=''; if(reset) detail.value=null
   try {
     if(tab.value==='dashboard') {
-      dashboard.value=null
+      if(reset) dashboard.value=null
       const data=await api('/dashboard'+query()); if(currentVersion!==version)return
       dashboard.value=data; await drawChart()
     } else if(['added','deleted','groups'].includes(tab.value)) {
-      records.value=[];nextCursor.value=null
+      if(reset) {records.value=[];nextCursor.value=null;totals.value={records:0,quantity:0}}
       await fetchRecords(false,currentVersion)
       const data=await api('/employees'+query()); if(currentVersion===version)employees.value=data
     } else if(tab.value==='admin') {
@@ -128,13 +131,37 @@ async function createUser(){if(await mutation('/admin/users',userForm))Object.as
 async function saveTenant(t:AnyRow){await mutation('/admin/tenants/'+t.id,{name:t.name,credential_ref:t.credential_ref,enabled:t.enabled},'PATCH')}
 async function saveGrants(u:AnyRow){await mutation('/admin/users/'+u.id+'/tenants',{tenant_ids:u.tenant_ids},'PUT')}
 function cardClick(type:string){if(type==='contact_added')tab.value='added';else if(type==='contact_deleted')tab.value='deleted';else{groupType.value=type;tab.value='groups'}}
-function pullStart(e:TouchEvent){if(window.scrollY<=0)touchStart=e.touches[0].clientY;else touchStart=0}
-function pullEnd(e:TouchEvent){if(touchStart && e.changedTouches[0].clientY-touchStart>90 && !loading.value)void refresh();touchStart=0}
+function pullStart(e:TouchEvent){if(!detail.value && window.scrollY<=0)touchStart=e.touches[0].clientY;else touchStart=0}
+function pullEnd(e:TouchEvent){if(!detail.value && touchStart && e.changedTouches[0].clientY-touchStart>90 && !loading.value)void refresh();touchStart=0}
 function expired(){if(me.value){me.value=null;version++;dashboard.value=null;records.value=[];error.value='登录已过期，请重新登录';if(config.value.ding_configured && /DingTalk/i.test(navigator.userAgent))void login()}}
-watch([tenant,startDate,endDate,tab,employee,addWay,groupType],()=>{void refresh()})
+watch(tenant,()=>{employee.value='';employees.value=[]}, {flush:'sync'})
+watch([tenant,startDate,endDate,tab,employee,addWay,groupType],()=>{void refresh(true)})
 watch(tenant,async()=>{if(me.value)try{await api('/me/preferences',{last_tenant_id:tenant.value==='all'?null:Number(tenant.value)},'PATCH')}catch(e:any){error.value=e.message}})
-watch(groupSearch,()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>void refresh(),300)})
+watch(groupSearch,()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>void refresh(true),300)})
 watch(sentinel,(el)=>{observer?.disconnect();if(el){observer=new IntersectionObserver(entries=>{if(entries[0].isIntersecting)void loadMore()});observer.observe(el)}})
+const dialogEl = ref<HTMLElement | null>(null)
+let previousFocus: HTMLElement | null = null
+let previousOverflow = ''
+watch(detail, async (value, oldValue)=>{
+  if(value && !oldValue) {
+    previousFocus = document.activeElement as HTMLElement
+    previousOverflow = document.body.style.overflow
+    document.body.style.overflow='hidden'
+    await nextTick(); dialogEl.value?.focus()
+  } else if(!value && oldValue) {
+    document.body.style.overflow=previousOverflow
+    await nextTick(); previousFocus?.focus()
+  }
+})
+function dialogKey(e: KeyboardEvent) {
+  if(e.key==='Escape') {e.preventDefault();detail.value=null}
+  if(e.key!=='Tab') return
+  const nodes=dialogEl.value?.querySelectorAll<HTMLElement>('button, input, select, a[href], [tabindex="0"]')
+  if(!nodes?.length) {e.preventDefault();return}
+  const first=nodes[0], last=nodes[nodes.length-1]
+  if(e.shiftKey && (document.activeElement===first || document.activeElement===dialogEl.value)) {e.preventDefault();last.focus()}
+  else if(!e.shiftKey && (document.activeElement===last || document.activeElement===dialogEl.value)) {e.preventDefault();first.focus()}
+}
 onMounted(async()=>{
   window.addEventListener('session-expired',expired)
   try{config.value=await api('/config');try{await loadMe();await refresh()}catch{if(config.value.ding_configured && /DingTalk/i.test(navigator.userAgent) && !sessionStorage.getItem('logged-out'))await login()}}
@@ -171,27 +198,27 @@ onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();observer?.disconnect(
     </aside>
     <main>
       <header class="topbar"><span>工作台 <span class="slash">/</span> {{tab==='admin'?'配置管理':nav.find(n=>n.id===tab)?.name}}</span><span class="environment"><span class="dot"></span>{{config.demo_enabled?'本地演示环境':'企业工作空间'}}</span></header>
-      <section class="page-heading"><div><p class="eyebrow">{{tab==='dashboard'?'OVERVIEW':'WORKSPACE'}}</p><h1>{{tab==='dashboard'?'客户关系总览':tab==='admin'?'主体与权限管理':tab==='me'?'个人中心':tab==='groups'?'群成员变更':tab==='added'?'新增联系人':'删除联系人'}}</h1><p class="muted">{{tab==='dashboard'?'看见增长，也看见每一次流失。':tab==='admin'?'管理接入配置、访问范围与事件处理任务。':'所有记录按主体授权展示，时间统一为北京时间。'}}</p></div><button class="secondary" :disabled="loading" @click="refresh">↻ {{loading?'更新中…':'刷新数据'}}</button></section>
+      <section class="page-heading"><div><p class="eyebrow">{{tab==='dashboard'?'OVERVIEW':'WORKSPACE'}}</p><h1>{{tab==='dashboard'?'客户关系总览':tab==='admin'?'主体与权限管理':tab==='me'?'个人中心':tab==='groups'?'群成员变更':tab==='added'?'新增联系人':'删除联系人'}}</h1><p class="muted">{{tab==='dashboard'?'看见增长，也看见每一次流失。':tab==='admin'?'管理接入配置、访问范围与事件处理任务。':'所有记录按主体授权展示，时间统一为北京时间。'}}</p></div><button class="secondary" :disabled="loading" @click="refresh()">↻ {{loading?'更新中…':'刷新数据'}}</button></section>
       <div v-if="config.demo_enabled" class="demo-banner">演示模式：页面数据由本地种子生成，不代表真实企业数据或平台联调结果。</div>
-      <div v-if="error" class="error" role="alert">{{error}} <button class="text-btn" @click="refresh">重试</button></div>
+      <p v-if="loading" class="loading-status" role="status">正在更新数据，网络较慢时请稍候…</p><div v-if="error" class="error" role="alert">{{error}} <button class="text-btn" @click="refresh()">重试</button></div>
       <section v-if="!['me','admin'].includes(tab)" class="filters">
         <label>当前主体<select v-model="tenant"><option value="all">全部授权主体</option><option v-for="t in me.tenants" :key="t.id" :value="String(t.id)">{{t.name}}</option></select></label>
-        <label>开始日期<input v-model="startDate" type="date" aria-label="开始日期"></label><span class="date-sep">—</span><label>结束日期<input v-model="endDate" type="date" aria-label="结束日期"></label>
-        <button class="text-btn" @click="startDate='';endDate=''">恢复默认</button><span class="filter-note">默认近 7 天 · 趋势近 30 天</span>
+        <template v-if="tab==='dashboard'"><label>开始日期<input v-model="startDate" type="date" aria-label="开始日期"></label><span class="date-sep">—</span><label>结束日期<input v-model="endDate" type="date" aria-label="结束日期"></label>
+        <button class="text-btn" @click="startDate='';endDate=''">恢复默认</button><span class="filter-note">默认近 7 天 · 趋势近 30 天</span></template><div v-else class="inherited-range">统计区间：{{startDate || dashboard?.metrics_range?.[0] || '近 7 天'}}{{endDate ? ' 至 '+endDate : (!startDate && dashboard?.metrics_range ? ' 至 '+dashboard.metrics_range[1] : '')}} <button class="text-btn" @click="tab='dashboard'">调整日期筛选 →</button></div>
       </section>
       <template v-if="tab==='dashboard'">
         <div v-if="!dashboard && loading" class="empty">正在加载汇总…</div>
         <template v-if="dashboard">
-          <div class="metrics"><button v-for="(card,i) in dashboard.cards" :key="card.type" class="metric" @click="cardClick(card.type)"><div class="metric-top"><span>{{labels[card.type]}}</span><span class="metric-symbol" :style="{color:colors[Number(i)]}">{{['↗','↘','↪','⊖'][Number(i)]}}</span></div><strong>{{card.value.toLocaleString()}}<small>人次</small></strong><div class="metric-footer"><span :class="card.delta>0?'up':card.delta<0?'down':'neutral'">{{card.delta>0?'↑ +':card.delta<0?'↓ ':''}}{{card.delta}}</span><span>较上一周期</span><span class="metric-arrow">↗</span></div></button></div>
+          <p class="range-summary">指标与排名区间：{{dashboard.metrics_range[0]}} 至 {{dashboard.metrics_range[1]}}</p><div class="metrics"><button v-for="(card,i) in dashboard.cards" :key="card.type" class="metric" @click="cardClick(card.type)"><div class="metric-top"><span>{{labels[card.type]}}</span><span class="metric-symbol" :style="{color:eventColor(card.type)}">{{['↗','↘','↪','⊖'][Number(i)]}}</span></div><strong>{{card.value.toLocaleString()}}<small>人次</small></strong><div class="metric-footer"><span :class="card.delta>0?'up':card.delta<0?'down':'neutral'">{{card.delta>0?'↑ +':card.delta<0?'↓ ':''}}{{card.delta}}</span><span>较上一周期</span><span class="metric-arrow">↗</span></div></button></div>
           <div v-if="dashboard.unresolved_count || dashboard.pending_jobs" class="notice">有 {{dashboard.unresolved_count}} 人次属于其他群成员变更或仍待核实，未计入外部客户流失指标，{{dashboard.pending_jobs}} 个任务尚未完成。详情和指标可能继续补全。</div>
-          <section class="panel trend-panel"><div class="panel-title"><div><h2>关系变化趋势</h2><p>按日查看四类事件，点击图例切换显示</p></div><span class="badge">{{dashboard.trend.length}} 天</span></div><div ref="chartEl" class="chart" aria-label="四类事件趋势图"></div><p class="chart-foot">统计区间 {{dashboard.range[0]}} 至 {{dashboard.range[1]}} · 截至 {{dateText(dashboard.updated_at)}}</p></section>
-          <div class="rankings"><section v-for="(type,i) in ['contact_added','contact_deleted','group_left']" :key="type" class="panel"><div class="panel-title"><h2>{{['新增员工','删除关系员工','主动退群群聊'][i]}} <span class="top-label">TOP 5</span></h2><button class="text-btn" @click="cardClick(type)">明细 ↗</button></div><div v-if="!dashboard.tops[type].length" class="empty small">暂无数据</div><div v-for="(r,index) in dashboard.tops[type]" :key="r.tenant_id+':'+r.id" class="rank-row"><span class="rank-number" :class="{first:index===0}">{{String(Number(index)+1).padStart(2,'0')}}</span><div class="rank-name">{{r.name}}<small>{{tenantName(r.tenant_id)}}</small><div class="rank-bar"><i :style="{width:(r.count/dashboard.tops[type][0].count*100)+'%',background:colors[Number(i)]}"></i></div></div><strong>{{r.count}}<small>人次</small></strong></div></section></div>
+          <section class="panel trend-panel"><div class="panel-title"><div><h2>关系变化趋势</h2><p>按日查看四类事件，点击图例切换显示</p></div><span class="badge">{{dashboard.trend.length}} 天</span></div><div ref="chartEl" class="chart" aria-label="四类事件趋势图"></div><p class="chart-foot">统计区间 {{dashboard.trend_range[0]}} 至 {{dashboard.trend_range[1]}} · 截至 {{dateText(dashboard.updated_at)}}</p></section>
+          <div class="rankings"><section v-for="(type,i) in ['contact_added','contact_deleted','group_left']" :key="type" class="panel"><div class="panel-title"><h2>{{['新增员工','删除关系员工','主动退群群聊'][i]}} <span class="top-label">TOP 5</span></h2><button class="text-btn" @click="cardClick(type)">明细 ↗</button></div><div v-if="!dashboard.tops[type].length" class="empty small">暂无数据</div><div v-for="(r,index) in dashboard.tops[type]" :key="r.tenant_id+':'+r.id" class="rank-row"><span class="rank-number" :class="{first:index===0}">{{String(Number(index)+1).padStart(2,'0')}}</span><div class="rank-name">{{r.name}}<small>{{tenantName(r.tenant_id)}}</small><div class="rank-bar"><i :style="{width:(r.count/dashboard.tops[type][0].count*100)+'%',background:eventColor(type)}"></i></div></div><strong>{{r.count}}<small>人次</small></strong></div></section></div>
         </template>
       </template>
       <template v-else-if="['added','deleted','groups'].includes(tab)">
         <section class="detail-toolbar"><div v-if="tab==='groups'" class="tabs"><button v-for="t in ['group_left','group_removed','group_change_unknown']" :class="{selected:groupType===t}" @click="groupType=t">{{labels[t]}}</button></div><label v-else>员工<select v-model="employee"><option value="">全部员工</option><option v-for="e in employees" :key="e.tenant_id+':'+e.id" :value="JSON.stringify([e.tenant_id,e.id])">{{e.name}} · {{tenantName(e.tenant_id)}}</option></select></label><label v-if="tab==='added'">添加方式<select v-model="addWay"><option value="">全部方式</option><option value="1">扫描二维码</option><option value="2">搜索手机号</option><option value="3">名片分享</option><option value="4">群聊添加</option><option value="5">手机通讯录</option><option value="6">微信联系人</option><option value="other">其他</option><option value="unknown">未知</option></select></label><input v-if="tab==='groups'" v-model="groupSearch" placeholder="搜索群名称" aria-label="群名称搜索"><span class="muted">{{totals.records}} 条记录 · {{totals.quantity}} 人次</span></section>
         <p v-if="tab==='groups' && groupType==='group_change_unknown'" class="muted">这里保留内部员工变更，以及客户身份或退出原因证据不足的记录。已识别的外部客户按主动退群、被移出群分类。</p>
-        <section class="panel event-list"><div v-if="!records.length" class="empty"><span>◎</span><h3>{{loading?'正在加载…':'暂无数据'}}</h3><p>调整主体或日期范围后再试</p></div><button v-for="e in records" :key="e.id" class="event-row" @click="detail=e"><Avatar :name="e.snapshot.customer_name" :media-id="e.snapshot.customer_media_id" :warm="tab==='deleted'" /><div class="event-content"><strong>{{isGroupEvent(e) ? groupName(e) : memberNames(e)}} <span v-if="e.quantity>1" class="badge">{{e.quantity}} 人次</span></strong><p v-if="e.event_type==='contact_added'">由 {{e.snapshot.employee_name}} 添加 · {{addWayLabel(e.add_way)}}</p><p v-else-if="e.event_type==='contact_deleted'">{{e.deletion_direction==='customer_deleted_employee'?'客户删除了员工':e.deletion_direction==='employee_deleted_customer'?'员工删除了客户':'删除方向未提供'}} · {{e.snapshot.employee_name}}</p><p v-else>{{eventLabel(e)}} · {{groupName(e)}}<span v-if="e.operator_id"> · 操作人 {{e.operator_id}}</span></p><small>{{tenantName(e.tenant_id)}}<span v-if="e.resolution!=='exact'"> · {{memberStatus(e)}}</span><span v-if="e.enrichment_status!=='complete'"> · 资料待补全</span><span v-if="e.channel_state"> · 渠道 {{e.channel_state}}</span></small></div><time>{{dateText(e.occurred_at)}}</time><span class="muted">›</span></button></section>
+        <section class="panel event-list"><div v-if="!records.length" class="empty"><span>◎</span><h3>{{loading?'正在加载…':'暂无数据'}}</h3><p>调整主体或日期范围后再试</p></div><button v-for="e in records" :key="e.id" class="event-row" @click="detail=e"><Avatar :name="e.snapshot.customer_name" :media-id="e.snapshot.customer_media_id" :warm="tab==='deleted'" /><div class="event-content"><strong>{{isGroupEvent(e) ? ((e.resolution==='exact' || hasMatchedMembers(e)) ? memberNames(e) : '成员待核实') : memberNames(e)}} <span v-if="e.quantity>1" class="badge">{{e.quantity}} 人次</span></strong><p v-if="e.event_type==='contact_added'">由 {{e.snapshot.employee_name}} 添加 · {{addWayLabel(e.add_way)}}</p><p v-else-if="e.event_type==='contact_deleted'">{{e.deletion_direction==='customer_deleted_employee'?'客户删除了员工':e.deletion_direction==='employee_deleted_customer'?'员工删除了客户':'删除方向未提供'}} · {{e.snapshot.employee_name}}</p><p v-else>{{eventLabel(e)}} · {{groupName(e)}}<span v-if="e.operator_id"> · 操作人 {{e.operator_id}}</span></p><div v-if="!isGroupEvent(e)" class="employee-identity"><Avatar :name="e.snapshot.employee_name" :media-id="e.snapshot.employee_media_id" /><span>员工 · {{e.snapshot.employee_name || e.employee_id || '未提供'}}</span></div><small>{{tenantName(e.tenant_id)}}<span v-if="e.resolution!=='exact'"> · {{memberStatus(e)}}{{hasMatchedMembers(e) ? '（系统比对推断）' : ''}}</span><span v-if="e.enrichment_status!=='complete'"> · 资料待补全</span><span v-if="e.channel_state"> · 渠道 {{e.channel_state}}</span></small></div><time>{{dateText(e.occurred_at)}}</time><span class="muted">›</span></button></section>
         <div ref="sentinel" class="load-more"><button v-if="nextCursor" class="secondary" :disabled="loading" @click="loadMore">{{loading?'加载中…':'加载更多'}}</button><span v-else-if="records.length">已显示全部记录</span></div>
       </template>
       <section v-else-if="tab==='me'" class="panel profile"><Avatar :name="me.name" :url="me.avatar_url" large /><h2>{{me.name}}</h2><span class="badge">{{me.role==='admin'?'管理员':'普通用户'}}</span><h3>可访问主体</h3><div v-for="t in me.tenants" class="profile-tenant">◫ {{t.name}}</div><p v-if="!me.tenants.length" class="muted">暂无授权主体，请联系管理员。</p><button v-if="me.role==='admin'" class="secondary" @click="tab='admin'">管理主体与授权</button><button class="secondary" @click="logout">退出登录</button></section>
@@ -204,7 +231,7 @@ onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();observer?.disconnect(
     </main>
     <nav class="mobile-nav"><button v-for="n in nav" :class="{active:tab===n.id}" @click="tab=n.id"><span>{{n.symbol}}</span>{{n.name}}</button></nav>
     <div v-if="detail" class="modal-backdrop" @click.self="detail=null">
-      <section class="modal" role="dialog" aria-modal="true" aria-label="事件详情">
+      <section ref="dialogEl" class="modal" tabindex="-1" @keydown="dialogKey" role="dialog" aria-modal="true" aria-label="事件详情">
         <button class="close" @click="detail=null" aria-label="关闭">×</button>
         <p class="eyebrow">EVENT DETAIL</p><h2>{{eventLabel(detail)}}</h2>
         <dl>

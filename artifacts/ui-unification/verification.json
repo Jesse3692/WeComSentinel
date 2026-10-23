@@ -1,0 +1,20 @@
+{
+  "mode": "mock API, local browser only",
+  "widths": [
+    1440,
+    900,
+    375,
+    390,
+    428
+  ],
+  "checks": [
+    "no horizontal overflow",
+    "same-query refresh retains canvas",
+    "tenant clears employee filter",
+    "detail inherits dates",
+    "Escape and focus restore",
+    "scroll lock",
+    "group member visible"
+  ],
+  "errors": []
+}

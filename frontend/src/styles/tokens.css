@@ -1,0 +1,34 @@
+:root {
+  /* Ding Design inspired project theme; official token values not independently verified. */
+  --brand-primary: #007fff;
+  --action: #006ad6;
+  --action-hover: #005cbd;
+  --action-active: #004f9f;
+  --bg-page: #f2f2f6;
+  --bg-card: #ffffff;
+  --bg-subtle: #eef4ff;
+  --text-primary: #171a1d;
+  --text-secondary: #596574;
+  --border: #dfe3e8;
+  --focus: #80bfff;
+  --event-added: #006ad6;
+  --event-deleted: #b75b16;
+  --event-left: #7354be;
+  --event-removed: #b33766;
+  --delta-up: #bc3030;
+  --delta-down: #238047;
+  --warning: #875b00;
+  --warning-bg: #fff7e6;
+  --danger: #bc3030;
+  --danger-bg: #fff1f0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --radius-control: 6px;
+  --radius-card: 8px;
+  --font-body: 14px;
+  --font-caption: 12px;
+  --font-title: 24px;
+}

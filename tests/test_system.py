@@ -310,6 +310,12 @@ async def test_dashboard_matches_details_and_previous_period(system):
     detail = (await client.get("/api/v1/events"+query)).json()["data"]
     assert dashboard["cards"][0] == {"type":"contact_added", "value":2, "delta":1}
     assert dashboard["trend"][0]["contact_added"] == 2
+    assert dashboard["metrics_range"] == dashboard["trend_range"] == ["2026-01-01", "2026-01-01"]
+    default = (await client.get("/api/v1/dashboard")).json()["data"]
+    assert len(default["trend"]) == 30
+    from datetime import date
+    assert (date.fromisoformat(default["metrics_range"][1]) - date.fromisoformat(default["metrics_range"][0])).days == 6
+    assert default["trend_range"] == [default["trend"][0]["date"], default["trend"][-1]["date"]]
     assert dashboard["tops"]["contact_added"][0]["count"] == detail["total_quantity"] == 2
     assert (await client.get("/api/v1/dashboard?start_date=2026-02-01&end_date=2026-01-01")).status_code == 422
 

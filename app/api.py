@@ -240,7 +240,9 @@ async def dashboard(tenant_id: str = "all", start_date: date | None = None, end_
     pending = await db.scalar(select(func.count()).select_from(Job).where(Job.tenant_id.in_(ids), Job.status != "done"))
     return result({"cards": [{"type": t, "value": current.get(t, 0), "delta": current.get(t, 0) - previous.get(t, 0)} for t in TYPES],
                    "trend": trend, "tops": tops, "unresolved_count": unresolved, "pending_jobs": pending,
-                   "range": [first.isoformat(), last.isoformat()], "updated_at": now_ms()})
+                   "range": [first.isoformat(), last.isoformat()],
+                   "metrics_range": [first.isoformat(), last.isoformat()],
+                   "trend_range": [tf.isoformat(), tl.isoformat()], "updated_at": now_ms()})
 
 
 @router.get("/api/v1/events")
