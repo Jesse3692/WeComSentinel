@@ -29,6 +29,42 @@ def result(data):
     return {"data": data}
 
 
+class ReportCache:
+    """Per-process TTL cache for expensive report aggregations.
+
+    Report viewers poll the same tenant/date window far more often than the
+    underlying aggregates change, so a short TTL removes nearly all repeated
+    aggregation work. Entries stay consistent for one fixed query shape; the
+    volatile fields (pending jobs, updated_at) are refreshed at serve time.
+    """
+
+    def __init__(self, ttl_ms: int = 0, max_entries: int = 256):
+        self.ttl_ms = max(0, int(ttl_ms))
+        self.max_entries = max_entries
+        self.entries: dict[str, tuple[int, dict]] = {}
+
+    def get(self, key: str):
+        if self.ttl_ms <= 0:
+            return None
+        entry = self.entries.get(key)
+        if entry is None:
+            return None
+        expires_at, payload = entry
+        if expires_at <= now_ms():
+            self.entries.pop(key, None)
+            return None
+        return payload
+
+    def put(self, key: str, payload: dict):
+        if self.ttl_ms <= 0:
+            return
+        if len(self.entries) >= self.max_entries:
+            oldest = sorted(self.entries.items(), key=lambda kv: kv[1][0])[: self.max_entries // 4]
+            for key_to_drop, _ in oldest:
+                self.entries.pop(key_to_drop, None)
+        self.entries[key] = (now_ms() + self.ttl_ms, payload)
+
+
 async def identity(request: Request, db=Depends(database)):
     token = request.cookies.get("monitor_session")
     if not token:
@@ -203,10 +239,20 @@ async def tenants(user=Depends(identity), db=Depends(database)):
 
 
 @router.get("/api/v1/dashboard")
-async def dashboard(tenant_id: str = "all", start_date: date | None = None, end_date: date | None = None,
-                    user=Depends(identity), db=Depends(database)):
+async def dashboard(request: Request, tenant_id: str = "all", start_date: date | None = None,
+                   end_date: date | None = None, user=Depends(identity), db=Depends(database)):
+    return await dashboard_report(request, tenant_id, start_date, end_date, user, db)
+
+
+async def dashboard_report(request, tenant_id, start_date, end_date, user, db, *, use_cache=True):
     ids = await allowed(db, user, tenant_id)
     first, last, start, end = period(start_date, end_date)
+    cache_key = "dashboard:" + digest(json.dumps([sorted(ids), str(start_date), str(end_date)]))
+    cached = request.app.state.report_cache.get(cache_key) if use_cache else None
+    if cached is not None:
+        pending = await db.scalar(select(func.count()).select_from(Job).where(
+            Job.tenant_id.in_(ids), Job.status != "done"))
+        return result({**cached, "pending_jobs": pending, "updated_at": now_ms()})
     base = BusinessEvent.tenant_id.in_(ids)
     async def counts(a, b):
         rows = (await db.execute(select(BusinessEvent.event_type, func.sum(BusinessEvent.quantity))
@@ -241,11 +287,14 @@ async def dashboard(tenant_id: str = "all", start_date: date | None = None, end_
         base, BusinessEvent.occurred_at >= start, BusinessEvent.occurred_at < end,
         BusinessEvent.event_type == "group_change_unknown"))
     pending = await db.scalar(select(func.count()).select_from(Job).where(Job.tenant_id.in_(ids), Job.status != "done"))
-    return result({"cards": [{"type": t, "value": current.get(t, 0), "delta": current.get(t, 0) - previous.get(t, 0)} for t in TYPES],
-                   "trend": trend, "tops": tops, "unresolved_count": unresolved, "pending_jobs": pending,
-                   "range": [first.isoformat(), last.isoformat()],
-                   "metrics_range": [first.isoformat(), last.isoformat()],
-                   "trend_range": [tf.isoformat(), tl.isoformat()], "updated_at": now_ms()})
+    payload = {"cards": [{"type": t, "value": current.get(t, 0), "delta": current.get(t, 0) - previous.get(t, 0)} for t in TYPES],
+               "trend": trend, "tops": tops, "unresolved_count": unresolved, "pending_jobs": pending,
+               "range": [first.isoformat(), last.isoformat()],
+               "metrics_range": [first.isoformat(), last.isoformat()],
+               "trend_range": [tf.isoformat(), tl.isoformat()]}
+    if use_cache:
+        request.app.state.report_cache.put(cache_key, payload)
+    return result({**payload, "updated_at": now_ms()})
 
 
 @router.get("/api/v1/events")
@@ -258,6 +307,55 @@ async def events(request: Request, tenant_id: str = "all", start_date: date | No
                  user=Depends(identity), db=Depends(database)):
     ids = await allowed(db, user, tenant_id)
     first, last, start, end = period(start_date, end_date)
+    employee_keyword = employee_keyword.strip()
+    filters = business_event_filters(ids, start, end, event_type=event_type, employee_id=employee_id,
+                                     employee_tenant_id=employee_tenant_id,
+                                     employee_keyword=employee_keyword, add_way=add_way,
+                                     group_keyword=group_keyword)
+    fingerprint = digest(json.dumps([ids, start, end, event_type, employee_id, employee_tenant_id,
+                                     employee_keyword, add_way, group_keyword, user.id]))
+    upper = await db.scalar(select(func.coalesce(func.max(BusinessEvent.id), 0)))
+    page_filter = []
+    totals = None
+    if cursor:
+        try:
+            decoded = decode_cursor(cursor, request.app.state.settings.secret_key)
+            if decoded["filter"] != fingerprint:
+                raise ValueError()
+            upper = decoded["upper"]
+            if decoded["time"] is not None:
+                page_filter.append(or_(BusinessEvent.occurred_at < decoded["time"],
+                                   and_(BusinessEvent.occurred_at == decoded["time"], BusinessEvent.id < decoded["id"])))
+            if isinstance(decoded.get("total"), int) and isinstance(decoded.get("quantity"), int):
+                totals = (decoded["total"], decoded["quantity"])
+        except (ValueError, KeyError, TypeError):
+            raise HTTPException(422, "分页游标已失效，请刷新")
+    filters.append(BusinessEvent.id <= upper)
+    if totals is None:
+        totals = (await db.execute(select(func.count(), func.coalesce(func.sum(BusinessEvent.quantity), 0)).where(*filters))).one()
+    total, quantity = totals
+    rows = (await db.scalars(select(BusinessEvent).where(*filters, *page_filter)
+                            .order_by(BusinessEvent.occurred_at.desc(), BusinessEvent.id.desc()).limit(limit + 1))).all()
+    next_cursor = None
+    if len(rows) > limit:
+        last_row = rows[limit - 1]
+        next_cursor = encode_cursor({"upper": upper, "filter": fingerprint, "time": last_row.occurred_at,
+                                     "id": last_row.id, "total": total, "quantity": quantity},
+                                    request.app.state.settings.secret_key)
+    page_cursor = cursor or encode_cursor({"upper": upper, "filter": fingerprint, "time": None, "id": None,
+                                           "total": total, "quantity": quantity},
+                                          request.app.state.settings.secret_key)
+    return result({"items": await event_details(db, rows[:limit]), "next_cursor": next_cursor, "page_cursor": page_cursor,
+                   "total_records": total, "total_quantity": quantity,
+                   "range": [first.isoformat(), last.isoformat()]})
+
+
+def business_event_filters(ids, start, end, *, event_type=None, employee_id=None,
+                           employee_tenant_id=None, employee_keyword="", add_way=None,
+                           group_keyword=None, customer_keyword="", customer_id=None,
+                           group_id=None, deletion_direction=None, resolution=None,
+                           enrichment_status=None):
+    """One event-filter definition for the page and read-only assistant tools."""
     filters = [BusinessEvent.tenant_id.in_(ids), BusinessEvent.occurred_at >= start, BusinessEvent.occurred_at < end]
     if event_type:
         if event_type not in TYPES + ["group_change_unknown"]:
@@ -295,35 +393,23 @@ async def events(request: Request, tenant_id: str = "all", start_date: date | No
         effective_name = func.coalesce(func.nullif(func.json_extract(
             BusinessEvent.snapshot, "$.group_name"), ""), current_name)
         filters.append(func.instr(effective_name, group_keyword) > 0)
-    fingerprint = digest(json.dumps([ids, start, end, event_type, employee_id, employee_tenant_id,
-                                     employee_keyword, add_way, group_keyword, user.id]))
-    upper = await db.scalar(select(func.coalesce(func.max(BusinessEvent.id), 0)))
-    page_filter = []
-    if cursor:
-        try:
-            decoded = decode_cursor(cursor, request.app.state.settings.secret_key)
-            if decoded["filter"] != fingerprint:
-                raise ValueError()
-            upper = decoded["upper"]
-            if decoded["time"] is not None:
-                page_filter.append(or_(BusinessEvent.occurred_at < decoded["time"],
-                                   and_(BusinessEvent.occurred_at == decoded["time"], BusinessEvent.id < decoded["id"])))
-        except (ValueError, KeyError, TypeError):
-            raise HTTPException(422, "分页游标已失效，请刷新")
-    filters.append(BusinessEvent.id <= upper)
-    total, quantity = (await db.execute(select(func.count(), func.coalesce(func.sum(BusinessEvent.quantity), 0)).where(*filters))).one()
-    rows = (await db.scalars(select(BusinessEvent).where(*filters, *page_filter)
-                            .order_by(BusinessEvent.occurred_at.desc(), BusinessEvent.id.desc()).limit(limit + 1))).all()
-    next_cursor = None
-    if len(rows) > limit:
-        last_row = rows[limit - 1]
-        next_cursor = encode_cursor({"upper": upper, "filter": fingerprint, "time": last_row.occurred_at, "id": last_row.id},
-                                    request.app.state.settings.secret_key)
-    page_cursor = cursor or encode_cursor({"upper": upper, "filter": fingerprint, "time": None, "id": None},
-                                         request.app.state.settings.secret_key)
-    return result({"items": await event_details(db, rows[:limit]), "next_cursor": next_cursor, "page_cursor": page_cursor,
-                   "total_records": total, "total_quantity": quantity,
-                   "range": [first.isoformat(), last.isoformat()]})
+    if customer_keyword:
+        matching_customer = select(Profile.id).where(
+            Profile.tenant_id == BusinessEvent.tenant_id, Profile.kind == "customer",
+            Profile.external_id == BusinessEvent.customer_id,
+            func.instr(func.lower(Profile.name), customer_keyword.lower()) > 0
+        ).correlate(BusinessEvent).exists()
+        filters.append(or_(func.instr(func.lower(BusinessEvent.customer_id), customer_keyword.lower()) > 0,
+            func.instr(func.lower(func.coalesce(func.json_extract(
+                BusinessEvent.snapshot, "$.customer_name"), "")), customer_keyword.lower()) > 0,
+            matching_customer))
+    for column, value in ((BusinessEvent.customer_id, customer_id), (BusinessEvent.group_id, group_id),
+                          (BusinessEvent.deletion_direction, deletion_direction),
+                          (BusinessEvent.resolution, resolution),
+                          (BusinessEvent.enrichment_status, enrichment_status)):
+        if value:
+            filters.append(column == value)
+    return filters
 
 
 @router.get("/api/v1/events/{event_id}")
@@ -357,10 +443,15 @@ async def options(request: Request, tenant_id: str = "all", keyword: str = Query
         ).order_by(display, identities.c.tenant_id, identities.c.employee_id).offset(offset).limit(limit)
         rows = (await db.execute(query)).all()
         return result([{"id": r.employee_id, "tenant_id": r.tenant_id, "name": r.name} for r in rows])
-    rows = (await db.scalars(select(Profile).where(Profile.tenant_id.in_(ids), Profile.kind == kind,
-                            func.instr(Profile.name, keyword) > 0).order_by(
-                                Profile.name, Profile.tenant_id, Profile.external_id).offset(offset).limit(limit))).all()
+    rows = (await db.scalars(group_profiles_query(ids, keyword).offset(offset).limit(limit))).all()
     return result([{"id": r.external_id, "tenant_id": r.tenant_id, "name": r.name} for r in rows])
+
+
+def group_profiles_query(ids, keyword=""):
+    """Shared tenant-scoped group snapshot query for filters and the assistant."""
+    return select(Profile).where(Profile.tenant_id.in_(ids), Profile.kind == "group",
+                                 func.instr(Profile.name, keyword) > 0).order_by(
+                                     Profile.name, Profile.tenant_id, Profile.external_id)
 
 
 @router.get("/api/v1/media/{media_id}")
@@ -373,7 +464,11 @@ async def media(media_id: int, request: Request, user=Depends(identity), db=Depe
     path = (root / row.relative_path).resolve()
     if not path.is_relative_to(root) or not path.is_file():
         raise HTTPException(404, "图片不存在")
-    return FileResponse(path, media_type=row.mime_type, headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+    # Media rows are content-addressed per tenant (unique sha256) and never mutate,
+    # so browsers may keep them instead of refetching avatars on every report view.
+    return FileResponse(path, media_type=row.mime_type,
+                        headers={"Cache-Control": "private, max-age=31536000, immutable",
+                                 "X-Content-Type-Options": "nosniff"})
 
 
 class TenantInput(BaseModel):

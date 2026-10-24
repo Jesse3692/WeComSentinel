@@ -1,0 +1,577 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "企微流失监控-平台接口",
+    "version": "1.0.0",
+    "description": "企业微信客户流失监控系统实际使用的钉钉与企业微信开放平台接口清单，含本系统暴露给平台/前端的集成端点。\n\n来源：app/platforms.py（出站适配层）、app/api.py（回调与免登）、app/media.py（头像下载）、docs/企业微信与钉钉接口及配置说明.md，生成于 2026-10-24，代码基线含未提交修改。\n\n说明：\n- 头像图片下载（GET https://*.qpic.cn|*.qlogo.cn/...，app/media.py save_avatar）为公开图片 URL 直下，非平台 API，未收录为接口。\n- 企业微信 token 失效（40014/42001）自动刷新并重试一次；钉钉 accessToken 无失效重试（docs §5.3）。\n- 钉钉侧当前无事件回调订阅；机器人消息、审批、群消息发送均未实现。"
+  },
+  "servers": [
+    { "url": "https://qyapi.weixin.qq.com", "description": "企业微信服务端 API" },
+    { "url": "https://api.dingtalk.com", "description": "钉钉新版 API（OAuth）" },
+    { "url": "https://oapi.dingtalk.com", "description": "钉钉旧版 API（topapi）" },
+    { "url": "http://localhost:8000", "description": "本系统（回调与免登端点，生产为 PUBLIC_ORIGIN 域名）" }
+  ],
+  "tags": [
+    { "name": "企业微信-凭证", "description": "access_token 获取与缓存（按主体缓存，提前 120 秒过期，app/platforms.py:65）" },
+    { "name": "企业微信-通讯录", "description": "内部成员资料（姓名/头像补全）" },
+    { "name": "企业微信-外部联系人", "description": "客户资料、客户列表与客户联系配置成员" },
+    { "name": "企业微信-客户群", "description": "客户群详情与群列表（成员快照比对退群证据）" },
+    { "name": "企业微信-回调事件", "description": "本系统暴露给企业微信的回调端点：URL 验证与事件推送" },
+    { "name": "钉钉-凭证", "description": "企业内部应用 accessToken（进程内缓存，提前 120 秒过期，无失效重试）" },
+    { "name": "钉钉-免登与用户", "description": "H5 免登链路：前端 JSAPI 取 code → 服务端换 userid → 用户详情，及本系统登录端点" }
+  ],
+  "paths": {
+    "/cgi-bin/gettoken": {
+      "servers": [{ "url": "https://qyapi.weixin.qq.com" }],
+      "get": {
+        "tags": ["企业微信-凭证"],
+        "operationId": "wecom-gettoken",
+        "summary": "获取 access_token",
+        "description": "所有企微业务调用的前置凭证。项目内按主体（corp_id + 凭据引用）缓存，提前 120 秒过期（app/platforms.py:65-66）。corpsecret 来自环境变量 WECOM_<REF>_SECRET。文档 doc path/90930。",
+        "parameters": [
+          { "name": "corpid", "in": "query", "required": true, "schema": { "type": "string" }, "description": "企业 CorpID（数据库 tenant.corp_id）" },
+          { "name": "corpsecret", "in": "query", "required": true, "schema": { "type": "string" }, "description": "应用凭据密钥" }
+        ],
+        "responses": {
+          "200": { "description": "凭证获取成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WecomTokenResponse" } } } }
+        }
+      }
+    },
+    "/cgi-bin/user/get": {
+      "servers": [{ "url": "https://qyapi.weixin.qq.com" }],
+      "get": {
+        "tags": ["企业微信-通讯录"],
+        "operationId": "wecom-user-get",
+        "summary": "读取成员详情",
+        "description": "内部员工姓名/头像补全。触发场景：联系人增删回调处理（worker.py:179）、群成员预取（worker.py:150）、退群证据补全（worker.py:318）、CLI sync-profiles（cli.py:101）、头像回填（scripts/backfill_avatars.py）。errcode 40014/42001 时项目内自动刷新 token 重试一次。",
+        "parameters": [
+          { "name": "access_token", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "userid", "in": "query", "required": true, "schema": { "type": "string" }, "description": "成员 UserID" }
+        ],
+        "responses": {
+          "200": { "description": "成员详情", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WecomUserDetail" } } } }
+        }
+      }
+    },
+    "/cgi-bin/externalcontact/get": {
+      "servers": [{ "url": "https://qyapi.weixin.qq.com" }],
+      "get": {
+        "tags": ["企业微信-外部联系人"],
+        "operationId": "wecom-externalcontact-get",
+        "summary": "获取客户详情",
+        "description": "外部客户姓名/头像/类型/企业名，及 follow_user 跟进关系中的 add_way 添加方式。触发场景：客户资料补全（worker.py:181）、edit/新增联系人强制刷新（worker.py:336,343）、CLI 同步。",
+        "parameters": [
+          { "name": "access_token", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "external_userid", "in": "query", "required": true, "schema": { "type": "string" }, "description": "外部联系人 UserID" }
+        ],
+        "responses": {
+          "200": { "description": "客户详情", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WecomExternalContactDetail" } } } }
+        }
+      }
+    },
+    "/cgi-bin/externalcontact/get_follow_user_list": {
+      "servers": [{ "url": "https://qyapi.weixin.qq.com" }],
+      "get": {
+        "tags": ["企业微信-外部联系人"],
+        "operationId": "wecom-get-follow-user-list",
+        "summary": "获取配置了客户联系功能的成员列表",
+        "description": "CLI sync-profiles 的同步入口（cli.py:99）；scripts/check_wecom.py 用其验证客户联系权限。",
+        "parameters": [
+          { "name": "access_token", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "成员 UserID 列表", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WecomFollowUserListResponse" } } } }
+        }
+      }
+    },
+    "/cgi-bin/externalcontact/list": {
+      "servers": [{ "url": "https://qyapi.weixin.qq.com" }],
+      "get": {
+        "tags": ["企业微信-外部联系人"],
+        "operationId": "wecom-externalcontact-list",
+        "summary": "获取客户列表",
+        "description": "按员工枚举其外部联系人 UserID，再逐个调 externalcontact/get 补全资料。仅 CLI sync-profiles 使用（cli.py:102）。",
+        "parameters": [
+          { "name": "access_token", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "userid", "in": "query", "required": true, "schema": { "type": "string" }, "description": "内部成员 UserID" }
+        ],
+        "responses": {
+          "200": { "description": "客户 UserID 列表", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WecomExternalContactListResponse" } } } }
+        }
+      }
+    },
+    "/cgi-bin/externalcontact/groupchat/get": {
+      "servers": [{ "url": "https://qyapi.weixin.qq.com" }],
+      "post": {
+        "tags": ["企业微信-客户群"],
+        "operationId": "wecom-groupchat-get",
+        "summary": "获取客户群详情",
+        "description": "群名、群主与 member_list 成员快照（need_name=1）。触发场景：群回调处理（worker.py:384）、群快照同步（worker.py:128）；退群前后快照比对用于识别退群成员。",
+        "parameters": [
+          { "name": "access_token", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WecomGroupchatGetRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "客户群详情", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WecomGroupchatDetail" } } } }
+        }
+      }
+    },
+    "/cgi-bin/externalcontact/groupchat/list": {
+      "servers": [{ "url": "https://qyapi.weixin.qq.com" }],
+      "post": {
+        "tags": ["企业微信-客户群"],
+        "operationId": "wecom-groupchat-list",
+        "summary": "获取客户群列表",
+        "description": "cursor 分页遍历全部客户群。CLI 同步 limit=100（cli.py:107）；检测脚本 limit=1 验证权限（check_wecom.py:174）。",
+        "parameters": [
+          { "name": "access_token", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WecomGroupchatListRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "客户群列表（含分页游标）", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WecomGroupchatListResponse" } } } }
+        }
+      }
+    },
+    "/callbacks/wecom/{callback_key}": {
+      "servers": [{ "url": "http://localhost:8000" }],
+      "get": {
+        "tags": ["企业微信-回调事件"],
+        "operationId": "wecom-callback-verify",
+        "summary": "接收消息服务器 URL 验证（挑战）",
+        "description": "管理员在企微后台配置回调 URL 时的一次性握手。流程：SHA-1 验签（token/timestamp/nonce/密文排序拼接，security.py:16）→ EncodingAESKey AES-256-CBC 解密（PKCS#7 去填充）→ 明文尾部 corp_id 与主体比对 → 原样返回明文 echostr。回调地址形如 {PUBLIC_ORIGIN}/callbacks/wecom/{callback_key}（api.py:448）。错误：404 未知/停用主体；503 TOKEN/AES_KEY 未配置；400 验签或解密失败；413 请求体超 1MB。",
+        "parameters": [
+          { "name": "callback_key", "in": "path", "required": true, "schema": { "type": "string" }, "description": "主体回调密钥（每个租户唯一）" },
+          { "name": "msg_signature", "in": "query", "required": true, "schema": { "type": "string" }, "description": "SHA-1 签名" },
+          { "name": "timestamp", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "nonce", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "echostr", "in": "query", "required": true, "schema": { "type": "string" }, "description": "平台加密的随机串" }
+        ],
+        "responses": {
+          "200": { "description": "验证通过，返回解密后的明文 echostr", "content": { "text/plain": { "schema": { "type": "string" } } } },
+          "400": { "description": "验签/解密失败或字段校验失败" },
+          "404": { "description": "未知或停用的主体" },
+          "503": { "description": "主体未配置 TOKEN / AES_KEY" }
+        }
+      },
+      "post": {
+        "tags": ["企业微信-回调事件"],
+        "operationId": "wecom-callback-event",
+        "summary": "客户联系事件推送",
+        "description": "企微「客户联系」事件推送入口（doc path/92130、92116）。解密验签通过后：Fernet 加密落库 callback_inbox 并投递处理 Job（同一事务，提交成功后才响应平台），立即返回 success。已处理事件：change_external_contact 的 add_external_contact / del_external_contact（员工删客户）/ del_follow_user（客户删员工，保留删除方向）/ edit_external_contact；change_external_chat 的 create / update / dismiss，其中 update+UpdateDetail=del_member 按 QuitScene 分类（0=主动退群→group_left，1=被移出→group_removed）并结合 MemChangeCnt、MemChangeList 与前后群快照比对（worker.py:373-413）；身份/成员类型/退出原因不足时保留待核实，不编造操作人。XML 中 MemChangeList 为 CDATA，security.py:20 有特判解析。",
+        "parameters": [
+          { "name": "callback_key", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "msg_signature", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "timestamp", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "nonce", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/xml": {
+              "schema": { "$ref": "#/components/schemas/WecomEncryptedXml" },
+              "example": "<xml><ToUserName><![CDATA[ww_corp_id]]></ToUserName><Encrypt><![CDATA[BASE64_CIPHERTEXT]]></Encrypt><AgentID><![CDATA[1000002]]></AgentID><InfoType>change_external_contact</InfoType></xml>"
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "收件与任务已持久化，返回字面量 success", "content": { "text/plain": { "schema": { "type": "string", "example": "success" } } } },
+          "400": { "description": "验签/解密失败或必填字段缺失（api.py:577-580）" },
+          "404": { "description": "未知或停用的主体" },
+          "413": { "description": "请求体超过 1MB" },
+          "503": { "description": "主体未配置 TOKEN / AES_KEY" }
+        }
+      }
+    },
+    "/v1.0/oauth2/accessToken": {
+      "servers": [{ "url": "https://api.dingtalk.com" }],
+      "post": {
+        "tags": ["钉钉-凭证"],
+        "operationId": "dingtalk-accessToken",
+        "summary": "获取企业内部应用 accessToken",
+        "description": "钉钉免登链路前置（platforms.py:102）。进程内缓存提前 120 秒过期；注意：与企微不同，token 失效不会自动刷新重试（docs §5.3）。appKey/appSecret 对应环境变量 DING_CLIENT_ID / DING_CLIENT_SECRET。",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DingtalkTokenRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "accessToken 获取成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DingtalkTokenResponse" } } } }
+        }
+      }
+    },
+    "/topapi/v2/user/getuserinfo": {
+      "servers": [{ "url": "https://oapi.dingtalk.com" }],
+      "post": {
+        "tags": ["钉钉-免登与用户"],
+        "operationId": "dingtalk-getuserinfo",
+        "summary": "免登 code 换取用户 userid",
+        "description": "H5 免登第二步：前端 dd.runtime.permission.requestAuthCode（旧版 JSAPI，frontend/src/App.vue:93）取得一次性 code，服务端换取 userid（platforms.py:106）。code 一次性有效，重复消费失败。",
+        "parameters": [
+          { "name": "access_token", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DingtalkGetuserinfoRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "免登成功，返回 userid 等信息", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DingtalkGetuserinfoResponse" } } } }
+        }
+      }
+    },
+    "/topapi/v2/user/get": {
+      "servers": [{ "url": "https://oapi.dingtalk.com" }],
+      "post": {
+        "tags": ["钉钉-免登与用户"],
+        "operationId": "dingtalk-user-get",
+        "summary": "查询通讯录用户详情",
+        "description": "按 userid 取 name、avatar，用于本系统用户展示与 avatar_url（platforms.py:109）。脚本侧 check_dingtalk.py:101 亦用于联调验证。",
+        "parameters": [
+          { "name": "access_token", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DingtalkUserGetRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "用户详情", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DingtalkUserGetResponse" } } } }
+        }
+      }
+    },
+    "/api/v1/config": {
+      "servers": [{ "url": "http://localhost:8000" }],
+      "get": {
+        "tags": ["钉钉-免登与用户"],
+        "operationId": "app-public-config",
+        "summary": "本系统公开配置（免登参数）",
+        "description": "向前端暴露 ding_corp_id（JSAPI requestAuthCode 的入参）与 ding_configured，驱动是否触发钉钉免登（api.py:162）。无鉴权。",
+        "responses": {
+          "200": { "description": "公开配置", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AppConfigResponse" } } } }
+        }
+      }
+    },
+    "/api/v1/auth/dingtalk": {
+      "servers": [{ "url": "http://localhost:8000" }],
+      "post": {
+        "tags": ["钉钉-免登与用户"],
+        "operationId": "app-auth-dingtalk",
+        "summary": "钉钉免登登录（本系统）",
+        "description": "接收前端 JSAPI code，服务端完成 oauth2/accessToken → getuserinfo → user/get 三步换取 corp_id+userid+name+avatar，匹配本地用户（ding_corp_id+ding_user_id，须 enabled 且有主体权限）后签发会话（api.py:169）。成功设置 HttpOnly Cookie monitor_session（SameSite=Lax，2 小时）并返回 CSRF token。错误：503 钉钉接口异常；403 无访问权限/用户停用；422 code 缺失或超长（≤2048）。",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthDingtalkRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "登录成功（Set-Cookie monitor_session）", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthDingtalkResponse" } } } },
+          "403": { "description": "无访问权限或用户被停用" },
+          "422": { "description": "请求体校验失败" },
+          "503": { "description": "钉钉平台接口调用失败" }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "WecomEnvelope": {
+        "type": "object",
+        "properties": {
+          "errcode": { "type": "integer", "description": "0 为成功；40014/42001 为 token 失效（项目内自动刷新重试）" },
+          "errmsg": { "type": "string" }
+        },
+        "required": ["errcode", "errmsg"]
+      },
+      "WecomTokenResponse": {
+        "allOf": [
+          { "$ref": "#/components/schemas/WecomEnvelope" },
+          {
+            "type": "object",
+            "properties": {
+              "access_token": { "type": "string" },
+              "expires_in": { "type": "integer", "description": "有效期秒数（通常 7200）" }
+            }
+          }
+        ]
+      },
+      "WecomUserDetail": {
+        "allOf": [
+          { "$ref": "#/components/schemas/WecomEnvelope" },
+          {
+            "type": "object",
+            "properties": {
+              "userid": { "type": "string" },
+              "name": { "type": "string", "description": "成员姓名（用于资料补全）" },
+              "department": { "type": "array", "items": { "type": "integer" } },
+              "position": { "type": "string" },
+              "mobile": { "type": "string" },
+              "gender": { "type": "string" },
+              "email": { "type": "string" },
+              "avatar": { "type": "string", "description": "头像 URL（qpic.cn/qlogo.cn，用于下载落盘）" },
+              "thumb_avatar": { "type": "string" },
+              "status": { "type": "integer", "description": "1=已激活 2=已禁用 4=未激活 5=退出企业" }
+            }
+          }
+        ]
+      },
+      "WecomExternalContact": {
+        "type": "object",
+        "properties": {
+          "external_userid": { "type": "string" },
+          "name": { "type": "string" },
+          "position": { "type": "string" },
+          "avatar": { "type": "string", "description": "客户头像 URL" },
+          "corp_name": { "type": "string", "description": "客户所在企业简称" },
+          "corp_full_name": { "type": "string" },
+          "type": { "type": "integer", "description": "1=微信用户 2=企业微信用户" },
+          "unionid": { "type": "string" },
+          "external_profile": { "type": "object", "description": "外部展示信息（自定义头像/昵称等）" }
+        }
+      },
+      "WecomFollowUser": {
+        "type": "object",
+        "properties": {
+          "userid": { "type": "string", "description": "跟进企业成员 UserID" },
+          "remark": { "type": "string" },
+          "description": { "type": "string" },
+          "createtime": { "type": "integer" },
+          "add_way": { "type": "integer", "description": "添加方式：0=未知 1=扫描二维码 2=搜索手机号 3=名片分享 4=群内添加 5=手机通讯录 8=第三方服务" },
+          "remark_corp_name": { "type": "string" },
+          "remark_mobiles": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "WecomExternalContactDetail": {
+        "allOf": [
+          { "$ref": "#/components/schemas/WecomEnvelope" },
+          {
+            "type": "object",
+            "properties": {
+              "external_contact": { "$ref": "#/components/schemas/WecomExternalContact" },
+              "follow_user": { "type": "array", "items": { "$ref": "#/components/schemas/WecomFollowUser" } }
+            }
+          }
+        ]
+      },
+      "WecomFollowUserListResponse": {
+        "allOf": [
+          { "$ref": "#/components/schemas/WecomEnvelope" },
+          {
+            "type": "object",
+            "properties": {
+              "follow_user": { "type": "array", "items": { "type": "string" }, "description": "配置了客户联系功能的成员 UserID" }
+            }
+          }
+        ]
+      },
+      "WecomExternalContactListResponse": {
+        "allOf": [
+          { "$ref": "#/components/schemas/WecomEnvelope" },
+          {
+            "type": "object",
+            "properties": {
+              "external_userid": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        ]
+      },
+      "WecomGroupchatGetRequest": {
+        "type": "object",
+        "properties": {
+          "chat_id": { "type": "string", "description": "客户群 ID（来自回调 change_external_chat 的 chat_id）" },
+          "need_name": { "type": "integer", "description": "项目固定传 1，返回群成员姓名" }
+        },
+        "required": ["chat_id"]
+      },
+      "WecomGroupchatMember": {
+        "type": "object",
+        "properties": {
+          "userid": { "type": "string", "description": "群成员 ID；外部客户为 external_userid 形态" },
+          "name": { "type": "string", "description": "need_name=1 时返回" },
+          "join_time": { "type": "integer" },
+          "join_scene": { "type": "integer", "description": "入群方式：1=由群成员邀请 2=成员邀请 3=通过二维码" },
+          "type": { "type": "integer", "description": "成员类型：1=企业成员 2=外部客户" }
+        }
+      },
+      "WecomGroupchatDetail": {
+        "allOf": [
+          { "$ref": "#/components/schemas/WecomEnvelope" },
+          {
+            "type": "object",
+            "properties": {
+              "group_chat": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string" },
+                  "name": { "type": "string" },
+                  "owner": { "type": "string", "description": "群主 UserID；不作为操作人参与业务分类" },
+                  "member_count": { "type": "integer" },
+                  "member_list": { "type": "array", "items": { "$ref": "#/components/schemas/WecomGroupchatMember" } },
+                  "admin_list": { "type": "array", "items": { "type": "object", "properties": { "userid": { "type": "string" } } } }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "WecomGroupchatListRequest": {
+        "type": "object",
+        "properties": {
+          "cursor": { "type": "string", "description": "分页游标，首页不传" },
+          "limit": { "type": "integer", "description": "单页条数（CLI 同步用 100，权限探测用 1）" }
+        }
+      },
+      "WecomGroupchatListResponse": {
+        "allOf": [
+          { "$ref": "#/components/schemas/WecomEnvelope" },
+          {
+            "type": "object",
+            "properties": {
+              "group_chat_list": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "chat_id": { "type": "string" },
+                    "status": { "type": "integer", "description": "0=正常 1=跟进人离位 2=离位待继承 3=继承中" }
+                  }
+                }
+              },
+              "next_cursor": { "type": "string" }
+            }
+          }
+        ]
+      },
+      "WecomEncryptedXml": {
+        "type": "object",
+        "description": "平台推送的加密 XML 正文；密文经 AES-256-CBC（EncodingAESKey）解密后才是事件明文。MemChangeList 节点为 CDATA 包裹的 JSON 数组（security.py:20 特判）。",
+        "properties": {
+          "ToUserName": { "type": "string", "description": "企业 CorpID；解密后须与主体一致（api.py:568）" },
+          "Encrypt": { "type": "string", "description": "AES 加密密文（Base64）" },
+          "AgentID": { "type": "string" },
+          "InfoType": { "type": "string", "description": "解密前外层类型标识" }
+        },
+        "required": ["ToUserName", "Encrypt"]
+      },
+      "DingtalkTokenRequest": {
+        "type": "object",
+        "properties": {
+          "appKey": { "type": "string", "description": "环境变量 DING_CLIENT_ID" },
+          "appSecret": { "type": "string", "description": "环境变量 DING_CLIENT_SECRET" }
+        },
+        "required": ["appKey", "appSecret"]
+      },
+      "DingtalkTokenResponse": {
+        "type": "object",
+        "properties": {
+          "expireIn": { "type": "integer", "description": "有效期秒数（通常 7200）" },
+          "accessToken": { "type": "string" }
+        },
+        "required": ["expireIn", "accessToken"]
+      },
+      "DingtalkEnvelope": {
+        "type": "object",
+        "properties": {
+          "errcode": { "type": "integer", "description": "0 为成功" },
+          "errmsg": { "type": "string" }
+        },
+        "required": ["errcode", "errmsg"]
+      },
+      "DingtalkGetuserinfoRequest": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "string", "description": "前端 JSAPI 免登一次性 code" }
+        },
+        "required": ["code"]
+      },
+      "DingtalkGetuserinfoResponse": {
+        "allOf": [
+          { "$ref": "#/components/schemas/DingtalkEnvelope" },
+          {
+            "type": "object",
+            "properties": {
+              "result": {
+                "type": "object",
+                "properties": {
+                  "userid": { "type": "string", "description": "免登用户 UserID（后续 user/get 入参）" },
+                  "device_id": { "type": "string" },
+                  "sys_level": { "type": "integer" }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "DingtalkUserGetRequest": {
+        "type": "object",
+        "properties": {
+          "userid": { "type": "string" }
+        },
+        "required": ["userid"]
+      },
+      "DingtalkUserGetResponse": {
+        "allOf": [
+          { "$ref": "#/components/schemas/DingtalkEnvelope" },
+          {
+            "type": "object",
+            "properties": {
+              "result": {
+                "type": "object",
+                "properties": {
+                  "userid": { "type": "string" },
+                  "name": { "type": "string" },
+                  "avatar": { "type": "string", "description": "头像 URL（用于 avatar_url 展示）" }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "AppConfigResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "ding_corp_id": { "type": "string", "nullable": true, "description": "JSAPI requestAuthCode 入参 corpId" },
+              "demo_enabled": { "type": "boolean" },
+              "ding_configured": { "type": "boolean", "description": "DING_CLIENT_ID/SECRET 已配置时为 true，前端据此触发免登" },
+              "app_env": { "type": "string" }
+            }
+          }
+        },
+        "required": ["data"]
+      },
+      "AuthDingtalkRequest": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "string", "minLength": 1, "maxLength": 2048 }
+        },
+        "required": ["code"]
+      },
+      "AuthDingtalkResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "csrf_token": { "type": "string", "description": "后续写请求须携带的 CSRF 令牌" },
+              "user": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "integer" },
+                  "name": { "type": "string" },
+                  "role": { "type": "string", "enum": ["admin", "user"] }
+                }
+              }
+            },
+            "required": ["csrf_token", "user"]
+          }
+        },
+        "required": ["data"],
+        "description": "响应同时 Set-Cookie: monitor_session（HttpOnly、SameSite=Lax、2 小时）"
+      }
+    }
+  }
+}

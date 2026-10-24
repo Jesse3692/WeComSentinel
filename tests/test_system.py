@@ -28,7 +28,7 @@ async def system(tmp_path, monkeypatch):
                         media_dir=str(tmp_path / "media"), secret_key="x" * 40,
                         payload_key=Fernet.generate_key().decode(), public_origin="http://test",
                         demo_enabled=True, demo_password="demo-test-password", worker_enabled=False,
-                        app_env="test")
+                        report_cache_seconds=0, app_env="test")
     app = create_app(settings)
     async with app.state.engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)

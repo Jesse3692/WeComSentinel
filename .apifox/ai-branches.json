@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-24T08:54:45.992Z",
+  "projects": {
+    "8966274": {
+      "branches": {},
+      "lastGuardError": {
+        "type": "guard_error",
+        "projectId": 8966274,
+        "message": "Automation caller branch required",
+        "createdAt": "2026-10-24T08:54:45.991Z"
+      },
+      "recentEvents": [
+        {
+          "type": "guard_error",
+          "projectId": 8966274,
+          "message": "Automation caller branch required",
+          "createdAt": "2026-10-24T08:47:03.202Z"
+        },
+        {
+          "type": "guard_error",
+          "projectId": 8966274,
+          "message": "Automation caller branch required",
+          "createdAt": "2026-10-24T08:49:10.020Z"
+        },
+        {
+          "type": "guard_error",
+          "projectId": 8966274,
+          "message": "Automation caller branch required",
+          "createdAt": "2026-10-24T08:54:45.991Z"
+        }
+      ]
+    }
+  },
+  "recentEvents": [
+    {
+      "type": "guard_error",
+      "projectId": 8966274,
+      "message": "Automation caller branch required",
+      "createdAt": "2026-10-24T08:47:03.202Z"
+    },
+    {
+      "type": "guard_error",
+      "projectId": 8966274,
+      "message": "Automation caller branch required",
+      "createdAt": "2026-10-24T08:49:10.020Z"
+    },
+    {
+      "type": "guard_error",
+      "projectId": 8966274,
+      "message": "Automation caller branch required",
+      "createdAt": "2026-10-24T08:54:45.991Z"
+    }
+  ]
+}

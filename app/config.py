@@ -1,9 +1,11 @@
 import os
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import dotenv_values
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 
 
 class Settings(BaseSettings):
@@ -15,6 +17,9 @@ class Settings(BaseSettings):
     public_origin: str = "http://localhost:8000"
     cookie_secure: bool = False
     worker_enabled: bool = True
+    report_cache_seconds: int = 30
+    db_pool_size: int = 20
+    db_max_overflow: int = 40
     media_dir: str = "./data/media"
     demo_enabled: bool = False
     demo_password: str = ""
@@ -22,8 +27,19 @@ class Settings(BaseSettings):
     ding_client_id: str = ""
     ding_client_secret: str = ""
     ding_agent_id: str = ""
+    assistant_enabled: bool = True
+    assistant_base_url: str = ""
+    assistant_model: str = "qwen35-122b-local"
+    assistant_api_key: str = ""
+    assistant_timeout_seconds: int = Field(default=45, ge=1, le=120)
+    assistant_max_tokens: int = Field(default=1200, ge=128, le=4096)
 
     def validate_runtime(self):
+        if self.assistant_base_url:
+            endpoint = urlsplit(self.assistant_base_url)
+            if (endpoint.scheme not in ("http", "https") or not endpoint.hostname
+                    or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment):
+                raise RuntimeError("ASSISTANT_BASE_URL must be an HTTP(S) base URL without credentials")
         if len(self.secret_key) < 32 or self.secret_key.startswith("replace-"):
             raise RuntimeError("Set SECRET_KEY to a random value of at least 32 characters")
         from cryptography.fernet import Fernet

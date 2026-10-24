@@ -7,6 +7,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 import { api, setCSRF, invalidateSession, sessionGeneration } from './api'
 import Avatar from './Avatar.vue'
 import NavIcon from './NavIcon.vue'
+import AssistantPanel from './AssistantPanel.vue'
 import { avatarRetryKey } from './avatarRetry'
 import { eventColor, chartColors, themeColor } from './theme/chart'
 import { hasMatchedMembers, memberStatus, memberNames, memberReason, groupEventLabel, groupClassificationNote, groupEvidenceText } from './groupEvidence'
@@ -28,6 +29,19 @@ const tenant = ref('all'), startDate = ref(''), endDate = ref(''), employee = re
 const groupType = ref('group_left'), dashboard = ref<AnyRow | null>(null), records = ref<AnyRow[]>([])
 const nextCursor = ref<string | null>(null), totals = ref({records: 0, quantity: 0}), employees = ref<AnyRow[]>([])
 const detail = ref<AnyRow | null>(null), adminTenants = ref<AnyRow[]>([]), users = ref<AnyRow[]>([]), jobs = ref<AnyRow[]>([])
+const assistantOpen = ref(false), assistantEvent = ref<AnyRow | null>(null)
+function openAssistant() {assistantEvent.value=null;assistantOpen.value=true}
+async function explainWithAssistant() {
+  const event=detail.value
+  if(!event)return
+  detail.value=null
+  await nextTick()
+  assistantEvent.value={id:event.id,tenant_id:event.tenant_id};assistantOpen.value=true
+}
+async function assistantEventDetails(id:number) {
+  try {const event=await api('/events/'+id);assistantOpen.value=false;detail.value=event}
+  catch(e:any){assistantOpen.value=false;error.value=e.message}
+}
 const tenantForm = reactive({name: '', corp_id: '', credential_ref: '', enabled: true})
 const userForm = reactive({name: '', ding_corp_id: '', ding_user_id: ''})
 const chartEl = ref<HTMLElement | null>(null), eventListEl = ref<HTMLElement | null>(null)
@@ -65,6 +79,7 @@ async function loadMe(restore = true, expectedVersion?: number) {
   tenant.value = desired === 'all' || data.tenants.some((t: AnyRow)=>String(t.id)===desired) ? desired : 'all'
 }
 function clearBusinessData() {
+  assistantOpen.value=false;assistantEvent.value=null
   detail.value=null; dashboard.value=null; records.value=[]; employees.value=[]; employeeVersion++
   nextCursor.value=null; totals.value={records:0,quantity:0}; effectiveRange.value=[]
   employee.value=''; employeeKeyword.value=''; appliedEmployeeKeyword.value=''; employeeMore.value=false; employeeOffset.value=0
@@ -73,6 +88,7 @@ function clearBusinessData() {
   chart?.dispose();resize?.disconnect()
 }
 function clearSession() {
+  assistantOpen.value=false;assistantEvent.value=null
   invalidateSession(); version++; employeeVersion++; clearTimeout(searchTimer);clearTimeout(employeeSearchTimer)
   me.value=null; detail.value=null; dashboard.value=null; records.value=[]; employees.value=[]
   nextCursor.value=null; totals.value={records:0,quantity:0}; effectiveRange.value=[]
@@ -228,14 +244,15 @@ async function createUser(){if(await mutation('/admin/users',userForm))Object.as
 async function saveTenant(t:AnyRow){await mutation('/admin/tenants/'+t.id,{name:t.name,credential_ref:t.credential_ref,enabled:t.enabled},'PATCH')}
 async function saveGrants(u:AnyRow){await mutation('/admin/users/'+u.id+'/tenants',{tenant_ids:u.tenant_ids},'PUT')}
 function cardClick(type:string){if(type==='contact_added')tab.value='added';else if(type==='contact_deleted')tab.value='deleted';else{groupType.value=type;tab.value='groups'}}
-function pullStart(e:TouchEvent){if(!detail.value && window.scrollY<=0)touchStart=e.touches[0].clientY;else touchStart=0}
-function pullEnd(e:TouchEvent){if(!detail.value && touchStart && e.changedTouches[0].clientY-touchStart>90 && !loading.value)refreshWithAvatars();touchStart=0}
+function pullStart(e:TouchEvent){if(!assistantOpen.value && !detail.value && window.scrollY<=0)touchStart=e.touches[0].clientY;else touchStart=0}
+function pullEnd(e:TouchEvent){if(!assistantOpen.value && !detail.value && touchStart && e.changedTouches[0].clientY-touchStart>90 && !loading.value)refreshWithAvatars();touchStart=0}
 function expired(){
   if(!me.value) return
   clearSession(); error.value='登录已过期，请重新登录'
   if(!sessionStorage.getItem('logged-out') && !logoutPending.value && config.value.ding_configured && /DingTalk/i.test(navigator.userAgent)) void login()
 }
 watch(tenant,()=>{employee.value='';employees.value=[];employeeKeyword.value='';appliedEmployeeKeyword.value='';employeeVersion++;clearTimeout(employeeSearchTimer)}, {flush:'sync'})
+watch([tenant,startDate,endDate],()=>{assistantEvent.value=null}, {flush:'sync'})
 watch([tenant,startDate,endDate,tab,employee,addWay,groupType,appliedEmployeeKeyword,pageSize],()=>{void refresh(true)})
 watch(employee,(value)=>{if(value){clearTimeout(employeeSearchTimer);appliedEmployeeKeyword.value=employeeKeyword.value.trim()}}, {flush:'sync'})
 let preferenceQueue: Promise<void> = Promise.resolve()
@@ -346,7 +363,7 @@ onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();dockObserver?.disconn
       <button class="secondary wide" :disabled="busy" @click="logout">退出登录</button>
     </section>
   </div>
-  <div v-else class="app-shell" :style="{'--bottom-nav-height':bottomNavHeight+'px'}" @touchstart.passive="pullStart" @touchend.passive="pullEnd">
+  <div v-else class="app-shell" :class="{'assistant-open':assistantOpen}" :style="{'--bottom-nav-height':bottomNavHeight+'px'}" @touchstart.passive="pullStart" @touchend.passive="pullEnd">
     <aside class="sidebar">
       <div class="brand"><span class="brandmark">◫</span><div>关系观察台<small>CLIENT INSIGHT</small></div></div>
       <p class="nav-label">工作空间</p>
@@ -355,7 +372,7 @@ onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();dockObserver?.disconn
       <div class="sidebar-bottom"><Avatar :name="me.name" :url="me.avatar_url" /><div><span class="sidebar-user-name" :title="me.name">{{me.name}}</span><small>{{me.role==='admin'?'管理员':'授权用户'}}</small></div><button class="text-btn" @click="logout" title="退出登录">↗</button></div>
     </aside>
     <main :class="{'paged-main':['added','deleted','groups'].includes(tab)}">
-      <header class="topbar"><span>工作台 <span class="slash">/</span> {{tab==='admin'?'配置管理':nav.find(n=>n.id===tab)?.name}}</span><span class="environment"><span class="dot"></span>{{config.demo_enabled?'本地演示环境':'企业工作空间'}}</span></header>
+      <header class="topbar"><span>工作台 <span class="slash">/</span> {{tab==='admin'?'配置管理':nav.find(n=>n.id===tab)?.name}}</span><div class="topbar-actions"><span class="environment"><span class="dot"></span>{{config.demo_enabled?'本地演示环境':'企业工作空间'}}</span><button class="secondary assistant-entry" :aria-expanded="assistantOpen" @click="openAssistant">✦ AI 助手</button></div></header>
       <section class="page-heading"><div><p class="eyebrow">{{tab==='dashboard'?'OVERVIEW':'WORKSPACE'}}</p><h1>{{tab==='dashboard'?'客户关系汇总':tab==='admin'?'主体与权限管理':tab==='me'?'个人中心':tab==='groups'?'群成员变更':tab==='added'?'新增联系人':'删除联系人'}}</h1><p class="muted">{{tab==='dashboard'?'看见增长，也看见每一次流失。':tab==='admin'?'管理接入配置、访问范围与事件处理任务。':'所有记录按主体授权展示，时间统一为北京时间。'}}</p></div><button class="secondary" :disabled="loading" @click="refreshWithAvatars()">↻ {{loading?'更新中…':'刷新数据'}}</button></section>
       <div v-if="config.demo_enabled" class="demo-banner">演示模式：页面数据由本地种子生成，不代表真实企业数据或平台联调结果。</div>
       <p v-if="loading" class="loading-status" role="status">正在更新数据，网络较慢时请稍候…</p><div v-if="error" class="error" role="alert">{{error}} <button class="text-btn" @click="refreshWithAvatars()">重试</button></div>
@@ -389,10 +406,15 @@ onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();dockObserver?.disconn
       <div v-if="['added','deleted','groups'].includes(tab)" class="pagination-reserve" :style="{height:paginationHeight+'px'}" aria-hidden="true"></div>
     </main>
     <nav ref="mobileNavEl" class="mobile-nav"><button v-for="n in nav" :key="n.id" :class="{active:tab===n.id}" @click="tab=n.id"><NavIcon :name="n.id" />{{n.name}}</button></nav>
+    <AssistantPanel :key="[me.id,me.role,...me.tenants.map((t:AnyRow)=>t.id)].join(':')" :open="assistantOpen" :user-id="me.id"
+      :tenant-id="assistantEvent ? String(assistantEvent.tenant_id) : tenant" :tenant-name="assistantEvent ? tenantName(assistantEvent.tenant_id) : tenant==='all'?'全部授权主体':tenantName(Number(tenant))"
+      :start-date="startDate || effectiveRange[0] || ''" :end-date="endDate || effectiveRange[1] || ''" :event-id="assistantEvent?.id || null"
+      @close="assistantOpen=false" @event="assistantEventDetails" />
     <div v-if="detail" class="modal-backdrop" @click.self="detail=null">
       <section ref="dialogEl" class="modal" tabindex="-1" @keydown="dialogKey" role="dialog" aria-modal="true" aria-label="事件详情">
         <header class="modal-header"><h2>{{eventLabel(detail)}}</h2><button class="close" @click="detail=null" aria-label="关闭">×</button></header>
         <div class="modal-body">
+        <button class="secondary event-assistant-entry" @click="explainWithAssistant">✦ 让助手解释</button>
         <dl>
           <dt>所属主体</dt><dd>{{tenantName(detail.tenant_id)}}</dd>
           <dt>发生时间</dt><dd>{{dateText(detail.occurred_at)}}</dd>

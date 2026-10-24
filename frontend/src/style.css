@@ -1112,6 +1112,22 @@ button:focus-visible,input:focus-visible,select:focus-visible {outline:3px solid
 .member-avatars {display:flex;align-items:center;gap:4px;flex-wrap:wrap;max-width:128px}
 .member-avatars .avatar {width:32px;height:32px}
 .dashboard-content,.dashboard-primary {display:contents}
+.topbar-actions {display:flex;align-items:center;gap:16px}
+.assistant-entry {font-size:13px;padding:8px 12px;min-height:38px}
+.event-assistant-entry {margin:16px 0}
+@media(min-width:1101px) {
+  .app-shell.assistant-open>main {width:calc(100% - 624px);max-width:none;margin-right:400px}
+}
+@media(min-width:1101px) and (max-width:1700px) {
+  .assistant-open .metrics,.assistant-open .rankings {grid-template-columns:repeat(2,minmax(0,1fr))}
+  .assistant-open .filters {flex-wrap:wrap}
+}
+@media(max-width:1150px) and (min-width:1101px) {.app-shell.assistant-open>main {width:calc(100% - 585px)}}
+@media(max-width:760px) {
+  .topbar-actions {gap:8px}
+  .topbar-actions .environment {display:none}
+  .assistant-open .mobile-nav {visibility:hidden}
+}
 .event-columns {display:none}
 @media(min-width:1800px) {
   main {max-width:none;padding-inline:clamp(40px,2vw,80px)}

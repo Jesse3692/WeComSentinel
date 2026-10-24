@@ -3,11 +3,11 @@ let generation = 0
 export function setCSRF(value: string) { csrf = value }
 export function sessionGeneration() { return generation }
 export function invalidateSession() { generation++; csrf = '' }
-export async function api(path: string, body?: unknown, method = 'GET', notifyExpired = true) {
+export async function api(path: string, body?: unknown, method = 'GET', notifyExpired = true, signal?: AbortSignal) {
   const started = generation
   let response: Response
   try { response = await fetch('/api/v1' + path, {
-    method, credentials: 'same-origin',
+    method, credentials: 'same-origin', signal,
     headers: {'Content-Type': 'application/json', ...(csrf ? {'X-CSRF-Token': csrf} : {})},
     ...(body === undefined ? {} : {body: JSON.stringify(body)}),
   }) } catch(error) {

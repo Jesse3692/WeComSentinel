@@ -11,7 +11,8 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
-from .api import router
+from .api import ReportCache, router
+from .assistant_api import router as assistant_router
 from .config import get_settings
 from .db import make_database
 from .models import now_ms
@@ -50,6 +51,8 @@ def create_app(settings=None):
                   redoc_url=None, openapi_url=None if settings.app_env == "production" else "/openapi.json")
     app.state.settings, app.state.sessions, app.state.engine = settings, sessions, engine
     app.state.login_attempts = {}
+    app.state.assistant_attempts, app.state.assistant_active = {}, set()
+    app.state.report_cache = ReportCache(settings.report_cache_seconds * 1000)
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -61,7 +64,9 @@ def create_app(settings=None):
         response.headers["X-Request-ID"] = request.state.request_id
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
-        if request.url.path.startswith("/api/"):
+        # Media rows are content-addressed and immutable; they carry their own
+        # private long cache policy instead of the blanket API no-store.
+        if request.url.path.startswith("/api/") and not request.url.path.startswith("/api/v1/media/"):
             response.headers["Cache-Control"] = "no-store"
         if settings.app_env == "production":
             response.headers["Strict-Transport-Security"] = "max-age=31536000"
@@ -84,6 +89,7 @@ def create_app(settings=None):
         return JSONResponse({"error": {"code": "503", "message": "数据库暂不可用，请重试"}}, status_code=503)
 
     app.include_router(router)
+    app.include_router(assistant_router)
 
     @app.get("/healthz")
     async def health():
