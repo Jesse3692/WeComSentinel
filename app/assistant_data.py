@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import and_, func, or_, select, union
 
-from .api import TZ, business_event_filters, event_details, group_profiles_query
+from .api import TZ, business_event_filters, business_event_page, event_details, group_profiles_query
 from .assistant import LABELS, ModelUnavailable, is_group_list_question, resolve_range
 from .models import Audit, BusinessEvent, Grant, Inbox, Job, Media, Profile, Session, Tenant, User
 from .security import decode_cursor, digest, encode_cursor
@@ -383,10 +383,8 @@ async def event_catalog(db, ids, query, request, user, message):
         query = query.model_copy(update={"cursor": encode_cursor({"upper": upper, "filter": fingerprint},
                                                    request.app.state.settings.secret_key)})
     filters.append(BusinessEvent.id <= upper)
-    total, quantity = (await db.execute(select(func.count(), func.coalesce(func.sum(BusinessEvent.quantity), 0))
-                                      .where(*filters))).one()
-    events = (await db.scalars(select(BusinessEvent).where(*filters).order_by(
-        BusinessEvent.occurred_at.desc(), BusinessEvent.id.desc()).offset(query.offset).limit(query.limit))).all()
+    events, total, quantity = await business_event_page(
+        db, filters, limit=query.limit, offset=query.offset)
     rows = await event_details(db, events)
     names = await tenant_names(db, ids)
     items = [{"id": row["id"], "type": LABELS.get(row["event_type"], "业务事件"),

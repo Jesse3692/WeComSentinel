@@ -1,4 +1,4 @@
-"""Report-path performance regressions: dashboard TTL cache and paged totals."""
+"""Report-path regressions: dashboard TTL cache and anchored event pages."""
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -48,7 +48,7 @@ async def test_dashboard_cache_disabled_keeps_live_reads(system):
     assert second["cards"][0]["value"] == 2
 
 
-async def test_event_page_totals_are_carried_in_cursor(system):
+async def test_event_pages_keep_anchor_and_return_totals(system):
     app, client, _ = system
     await login(client)
     for index in range(25):
@@ -59,7 +59,7 @@ async def test_event_page_totals_are_carried_in_cursor(system):
     second = (await client.get(f"/api/v1/events?limit=20&cursor={first['next_cursor']}")).json()["data"]
     assert second["total_records"] == 25 and second["total_quantity"] == first["total_quantity"]
     assert len(second["items"]) == 5 and not second["next_cursor"]
-    # The anchor cursor also carries the frozen totals for clients jumping back.
+    # Returning through the anchor keeps the ID boundary and recomputes totals.
     anchored = (await client.get(f"/api/v1/events?limit=20&cursor={first['page_cursor']}")).json()["data"]
     assert anchored["total_records"] == 25
 

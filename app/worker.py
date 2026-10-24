@@ -7,6 +7,7 @@ from copy import deepcopy
 
 from cryptography.fernet import Fernet
 from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.exc import IntegrityError
 
 from .media import save_avatar
@@ -68,19 +69,28 @@ class Worker:
             if job_id is None:
                 return False
             result = await db.execute(update(Job).where(Job.id == job_id, eligible).values(
-                status="running", lease_until=now + 180_000, attempts=Job.attempts + 1))
+                status="running", lease_until=now + 180_000, attempts=Job.attempts + 1)
+                .returning(Job.callback_id, Job.tenant_id, Job.attempts, Job.lease_until))
+            claim = result.one_or_none()
             await db.commit()
-            if not result.rowcount:
+            if claim is None:
                 return False
-            job = await db.get(Job, job_id)
-            inbox = await db.get(Inbox, job.callback_id)
-            tenant = await db.get(Tenant, job.tenant_id)
-            payload = json.loads(Fernet(self.settings.payload_key.encode()).decrypt(inbox.payload_encrypted))
         error = None
         try:
-            if not tenant.enabled:
-                raise PlatformError("tenant_disabled")
             async with asyncio.timeout(120):
+                if claim.attempts > 5:
+                    raise PlatformError("processing_attempts_exhausted")
+                async with self.sessions() as db:
+                    inbox = await db.get(Inbox, claim.callback_id)
+                    tenant = await db.get(Tenant, claim.tenant_id)
+                    if inbox is None:
+                        raise PlatformError("callback_payload_missing")
+                    if tenant is None:
+                        raise PlatformError("tenant_missing")
+                    payload = json.loads(Fernet(self.settings.payload_key.encode()).decrypt(
+                        inbox.payload_encrypted))
+                if not tenant.enabled:
+                    raise PlatformError("tenant_disabled")
                 complete = await self.normalize(tenant, inbox, payload)
             if not complete:
                 error = "profile_incomplete"
@@ -88,13 +98,16 @@ class Worker:
             # Never put upstream request URLs or credentials into database errors.
             error = str(exc) if isinstance(exc, PlatformError) else type(exc).__name__
         async with self.sessions() as db:
-            job = await db.get(Job, job_id)
-            job.lease_until = None
-            job.last_error = error
-            job.status = "done" if not error else ("failed" if job.attempts >= 5 else "retry")
-            job.next_run_at = now_ms() + min(300_000, 2000 * 2 ** job.attempts) + random.randint(0, 1000)
-            inbox = await db.get(Inbox, job.callback_id)
-            inbox.status = job.status
+            status = "done" if not error else ("failed" if claim.attempts >= 5 else "retry")
+            result = await db.execute(update(Job).where(
+                Job.id == job_id, Job.status == "running", Job.attempts == claim.attempts,
+                Job.lease_until == claim.lease_until).values(
+                    lease_until=None, last_error=error, status=status,
+                    next_run_at=now_ms() + min(300_000, 2000 * 2 ** claim.attempts)
+                    + random.randint(0, 1000)))
+            # A previous lease holder must not acknowledge a later execution.
+            if result.rowcount:
+                await db.execute(update(Inbox).where(Inbox.id == claim.callback_id).values(status=status))
             await db.commit()
         return True
 
@@ -105,26 +118,39 @@ class Worker:
             return await db.scalar(select(Profile).where(Profile.tenant_id == tenant_id,
                                    Profile.kind == kind, Profile.external_id == external_id))
 
-    async def put_profile(self, tenant_id, kind, external_id, data, synced_at=None):
+    async def reserve_group_capture(self, tenant_id, external_id):
+        """Allocate request order without treating an in-flight response as a snapshot."""
         async with self.sessions() as db:
-            row = await db.scalar(select(Profile).where(Profile.tenant_id == tenant_id,
-                                  Profile.kind == kind, Profile.external_id == external_id))
-            if row is None:
-                row = Profile(tenant_id=tenant_id, kind=kind, external_id=external_id)
-                db.add(row)
-            if row.id is not None and kind == "group" and synced_at is not None:
-                await db.execute(update(Profile).where(Profile.id == row.id, Profile.synced_at <= synced_at).values(
-                    name=data.get("name") or "未知", data=data, synced_at=synced_at))
-                await db.commit()
-                return
-            row.name = data.get("name") or "未知"
-            row.data = data
-            row.synced_at = synced_at if synced_at is not None else now_ms()
+            statement = insert(Profile).values(tenant_id=tenant_id, kind="group", external_id=external_id,
+                name="未知", data={}, synced_at=0, capture_version=1)
+            version = await db.scalar(statement.on_conflict_do_update(
+                index_elements=[Profile.tenant_id, Profile.kind, Profile.external_id],
+                set_={"capture_version": Profile.capture_version + 1}).returning(Profile.capture_version))
+            await db.commit()
+            return version
+
+    async def put_profile(self, tenant_id, kind, external_id, data, synced_at=None, capture_version=None):
+        captured_at = synced_at if synced_at is not None else now_ms()
+        statement = insert(Profile).values(tenant_id=tenant_id, kind=kind, external_id=external_id,
+            name=data.get("name") or "未知", data=data, synced_at=captured_at,
+            capture_version=capture_version or 0)
+        condition = None
+        if kind == "group":
+            condition = Profile.synced_at <= captured_at
+            if capture_version is not None:
+                condition = and_(condition, Profile.capture_version == capture_version)
+        statement = statement.on_conflict_do_update(
+            index_elements=[Profile.tenant_id, Profile.kind, Profile.external_id],
+            set_={"name": statement.excluded.name, "data": statement.excluded.data,
+                  "synced_at": statement.excluded.synced_at}, where=condition)
+        async with self.sessions() as db:
+            await db.execute(statement)
             await db.commit()
 
-    async def sync_group(self, tenant, chat_id, detail=None, sampled_at=None):
+    async def sync_group(self, tenant, chat_id, detail=None, sampled_at=None, capture_version=None):
         """Persist membership before bounded prefetch; never create business events."""
         if detail is None:
+            capture_version = await self.reserve_group_capture(tenant.id, chat_id)
             detail = await self.platforms.group(tenant, chat_id)
         sampled_at = sampled_at if sampled_at is not None else now_ms()
         detail = deepcopy(detail)
@@ -135,7 +161,8 @@ class Worker:
             old = old_members.get((member.get("userid"), str(member.get("type"))), {})
             if not member.get("media_id") and old.get("media_id"):
                 member["media_id"] = old["media_id"]
-        await self.put_profile(tenant.id, "group", chat_id, detail, synced_at=sampled_at)
+        await self.put_profile(tenant.id, "group", chat_id, detail, synced_at=sampled_at,
+                               capture_version=capture_version)
         semaphore = asyncio.Semaphore(3)
         complete = True
 
@@ -164,7 +191,8 @@ class Worker:
         except TimeoutError:
             complete = False
         # Preserve the capture timestamp, not the end of slow avatar downloads.
-        await self.put_profile(tenant.id, "group", chat_id, detail, synced_at=sampled_at)
+        await self.put_profile(tenant.id, "group", chat_id, detail, synced_at=sampled_at,
+                               capture_version=capture_version)
         return detail, complete
 
     async def get_profile(self, tenant, kind, external_id, force=False):
@@ -377,6 +405,7 @@ class Worker:
             if not chat_id:
                 raise PlatformError("group_chat_id_missing")
             previous = await self.cached(tenant.id, "group", chat_id)
+            capture_version = await self.reserve_group_capture(tenant.id, chat_id)
             current = None
             sampled_at = None
             group_error = None
@@ -397,11 +426,13 @@ class Worker:
                     group_records(snapshot, quantity, occurred, chat_id), replace_group=True)
             if current:
                 if change == "create" or (change == "update" and payload.get("UpdateDetail") == "add_member"):
-                    _, complete = await self.sync_group(tenant, chat_id, current, sampled_at)
+                    _, complete = await self.sync_group(tenant, chat_id, current, sampled_at,
+                                                        capture_version=capture_version)
                     if not complete:
                         raise PlatformError("group_member_avatar_incomplete")
                 else:
-                    await self.put_profile(tenant.id, "group", chat_id, current, synced_at=sampled_at)
+                    await self.put_profile(tenant.id, "group", chat_id, current, synced_at=sampled_at,
+                                           capture_version=capture_version)
             if group_error and change != "dismiss":
                 raise PlatformError(group_error)
             if change == "update" and payload.get("UpdateDetail") == "del_member":

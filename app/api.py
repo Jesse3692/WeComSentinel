@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, delete, func, or_, select, union
+from sqlalchemy import and_, delete, func, or_, select, true, union
 
 from .models import Audit, BusinessEvent, Grant, Job, Media, Profile, Session, Tenant, User, now_ms
 from .platforms import PlatformError
@@ -316,7 +316,6 @@ async def events(request: Request, tenant_id: str = "all", start_date: date | No
                                      employee_keyword, add_way, group_keyword, user.id]))
     upper = await db.scalar(select(func.coalesce(func.max(BusinessEvent.id), 0)))
     page_filter = []
-    totals = None
     if cursor:
         try:
             decoded = decode_cursor(cursor, request.app.state.settings.secret_key)
@@ -326,16 +325,10 @@ async def events(request: Request, tenant_id: str = "all", start_date: date | No
             if decoded["time"] is not None:
                 page_filter.append(or_(BusinessEvent.occurred_at < decoded["time"],
                                    and_(BusinessEvent.occurred_at == decoded["time"], BusinessEvent.id < decoded["id"])))
-            if isinstance(decoded.get("total"), int) and isinstance(decoded.get("quantity"), int):
-                totals = (decoded["total"], decoded["quantity"])
         except (ValueError, KeyError, TypeError):
             raise HTTPException(422, "分页游标已失效，请刷新")
     filters.append(BusinessEvent.id <= upper)
-    if totals is None:
-        totals = (await db.execute(select(func.count(), func.coalesce(func.sum(BusinessEvent.quantity), 0)).where(*filters))).one()
-    total, quantity = totals
-    rows = (await db.scalars(select(BusinessEvent).where(*filters, *page_filter)
-                            .order_by(BusinessEvent.occurred_at.desc(), BusinessEvent.id.desc()).limit(limit + 1))).all()
+    rows, total, quantity = await business_event_page(db, filters, page_filter=page_filter, limit=limit + 1)
     next_cursor = None
     if len(rows) > limit:
         last_row = rows[limit - 1]
@@ -348,6 +341,23 @@ async def events(request: Request, tenant_id: str = "all", start_date: date | No
     return result({"items": await event_details(db, rows[:limit]), "next_cursor": next_cursor, "page_cursor": page_cursor,
                    "total_records": total, "total_quantity": quantity,
                    "range": [first.isoformat(), last.isoformat()]})
+
+
+async def business_event_page(db, filters, *, page_filter=(), limit=20, offset=0):
+    """Read live totals and an event page from the same database snapshot."""
+    # The upper ID excludes later inserts, but retries can still reclassify or
+    # split existing events. One statement also preserves totals on empty pages.
+    totals = select(func.count().label("records"),
+                    func.coalesce(func.sum(BusinessEvent.quantity), 0).label("quantity")).where(*filters).cte("totals")
+    page = (select(BusinessEvent.id).where(*filters, *page_filter)
+            .order_by(BusinessEvent.occurred_at.desc(), BusinessEvent.id.desc())
+            .offset(offset).limit(limit).cte("page"))
+    entries = (await db.execute(
+        select(BusinessEvent, totals.c.records, totals.c.quantity)
+        .select_from(totals.outerjoin(page, true()).outerjoin(BusinessEvent, BusinessEvent.id == page.c.id))
+        .order_by(BusinessEvent.occurred_at.desc(), BusinessEvent.id.desc()))).all()
+    total, quantity = entries[0][1:]
+    return [entry[0] for entry in entries if entry[0] is not None], total, quantity
 
 
 def business_event_filters(ids, start, end, *, event_type=None, employee_id=None,

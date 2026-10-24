@@ -63,6 +63,7 @@ class Profile(Base):
     name: Mapped[str] = mapped_column(default="未知")
     data: Mapped[dict] = mapped_column(JSON, default=dict)
     synced_at: Mapped[int] = mapped_column(default=now_ms)
+    capture_version: Mapped[int] = mapped_column(default=0, server_default="0")
 
 
 class Media(Base):
