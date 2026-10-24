@@ -4,9 +4,11 @@ Python + FastAPI + SQLite 后端，Vue 3 + TypeScript + ECharts 前端。支持�
 
 已实现回调验签解密、可靠入库与去重、可恢复任务处理、客户资料与头像补全、看板、明细、钉钉登录适配、主体授权、管理页面和数据库备份。
 
-**真实企业微信及钉钉端到端联调尚未完成。** 历史检测曾取得钉钉应用 token，但不代表免登与用户权限已通过；平台配置与检测状态见 [接口及配置说明](docs/企业微信与钉钉接口及配置说明.md)。演示数据不代表真实平台结果。群变更按业务动作分类：快照证据足以关联外部客户时，计入主动退群或被移出群，保留 inferred 识别依据；内部员工和证据不足的记录留在“其他 / 待核实”，不编造操作人。判定及历史升级见 [客户事件分类与识别依据](docs/群成员识别状态.md)。
+**已有真实部署及部分企微、钉钉验收结果，完整验收尚未闭合。** 2026-10-23 的记录包含真实工作台免登、主动退群/被移出与历史头像、小米14交互及3440×1440钉钉PC布局通过反馈；生产安全配置、演示数据隔离、员工头像授权、操作人来源和部分真实场景仍待收口。结果与范围见 [真实验收记录](docs/真实钉钉环境验收记录.md) 和 [当前未完成项](docs/需求1-8章当前未完成项复查.md)。本轮仅核对源码与既有记录，未重新连接服务器或平台。
 
-文档与代码核对日期：2026-10-22。启动和依赖管理以本文为入口，当前行为见 [实现说明](docs/实现说明.md) 和 [后端接口说明](docs/后端接口说明.md)，验证结果见 [自测报告](docs/自测报告.md)。`docs/requirement/` 保留原始需求，[第 1 天技术方案](docs/第1天技术方案.md) 保留评审设计，不作为已交付清单。
+群变更按业务动作分类：快照证据足以关联外部客户时，计入主动退群或被移出群，保留 inferred 识别依据；内部员工和证据不足的记录留在“其他 / 待核实”，不编造操作人。判定及历史升级见 [客户事件分类与识别依据](docs/群成员识别状态.md)。演示数据不代表真实平台结果。
+
+文档与代码核对日期：2026-10-24，源码基线 `24e6586`。启动和依赖管理以本文为入口，当前行为见 [实现说明](docs/实现说明.md) 和 [后端接口说明](docs/后端接口说明.md)，验证结果见 [自测报告](docs/自测报告.md)，专项记录见 [文档索引](docs/文档索引.md)。`docs/requirement/` 保留原始需求，[第 1 天技术方案](docs/第1天技术方案.md) 保留评审设计，不作为已交付清单。
 
 ## 本机快速启动
 
@@ -68,17 +70,21 @@ app/
   models.py       SQLite 模型
   security.py     回调签名与 AES 解密、游标签名
   worker.py       持久化收件箱、后台任务、资料与事件处理
+  event_classification.py  群成员证据与外部客户业务分类
   platforms.py    企业微信及钉钉企业内部应用接口适配
   media.py        受限来源的头像下载
   cli.py          初始化、管理员、快照同步、备份
 frontend/         Vue H5 页面和前端锁文件
-migrations/       Alembic 迁移及冻结的初始模型
+migrations/       Alembic 迁移、冻结的历史模型与群事件分类逻辑
 tests/            后端集成测试、浏览器冒烟测试
 docs/             需求、技术方案、配置指南、实现说明与自测记录
-deploy/           容器与 HTTPS 反向代理配置
+scripts/          平台诊断、回调检查、头像补全和前端识别检查
+deploy/           源码/容器部署、同步更新、服务及反向代理配置
 ```
 
-前端开发可运行 `pnpm dev`。开发时将 `.env` 的 `PUBLIC_ORIGIN` 设为 `http://localhost:5173` 并从该地址访问前端，Vite 将 `/api` 代理到后端；构建后同源访问 8000 端口时改回 `http://localhost:8000`。修改环境变量后重启后端。
+前端开发从项目根目录运行 `pnpm --dir frontend dev`。开发时将 `.env` 的 `PUBLIC_ORIGIN` 设为 `http://localhost:5173` 并从该地址访问前端，Vite 将 `/api` 代理到后端；构建后同源访问 8000 端口时改回 `http://localhost:8000`。修改环境变量后重启后端。
+
+新增、删除支持按员工姓名或 ID 直接搜索，并可指定员工精确筛选；群变更支持群名搜索。三类明细共用上一页/下一页和每页 10/20/50 条选择，分页栏吸底，翻页固定首屏日期和数据上界；支持下拉刷新。汇总无日期筛选时指标与排名近 7 天、趋势近 30 天，填写任一日期后统一使用补齐的区间。页面适配手机、普通电脑及超宽屏，具体行为见实现说明。
 
 SQLite 使用 WAL、外键检查、5 秒忙等待和 FULL 同步。网络请求不在数据库事务内执行。回调收件箱与任务在同一事务中保存，提交成功后再响应平台。后台消费者空闲时每秒检查任务，单次处理超时 120 秒、租约 180 秒；失败采用指数退避并带随机抖动，第 5 次尝试仍失败时进入失败队列，可在管理页重试。
 
@@ -99,6 +105,8 @@ uv run python -m app.cli sync-profiles --tenant-id 1
 ```
 
 群和客户列表可见范围由公司提供的 API 权限决定。快照同步不是历史事件导入。Secret、回调 Token 和 AESKey 均不通过管理页面读取或返回。
+
+`sync-profiles` 还会保存群成员基准并预取成员头像；建群及成员进群回调使用同一流程。新主体应先完成同步，再开展离群测试；缺少事前快照时不能靠当前群列表还原历史离群身份。
 
 ## 测试与备份
 
@@ -144,6 +152,7 @@ uv run python -m scripts.check_dingtalk --with-login
 ```powershell
 uv run pytest -q
 uv run ruff check app tests migrations deploy scripts
+node scripts/test-group-evidence.cjs
 uv run python -m app.cli backup --output backups/manual-backup
 ```
 
@@ -151,13 +160,15 @@ uv run python -m app.cli backup --output backups/manual-backup
 
 备份命令使用 SQLite 在线备份，并复制媒体目录。备份目录必须不存在。恢复时先停止服务，恢复数据库及媒体，单独恢复原 `PAYLOAD_KEY` 和其他安全配置，运行迁移后启动服务。媒体文件不原地修改；备份期间如有新增图片，允许出现未被数据库引用的额外文件。
 
+只读查看最近回调、任务及事件可运行 `uv run python -m scripts.check_callbacks --limit 10`，不会重放回调或调用平台。历史头像补全先用 `uv run python -m scripts.backfill_avatars` 查看目标计数；加 `--apply` 才会备份数据库、请求平台并写入头像引用，不能恢复没有可靠身份或历史来源的照片。以上工具范围见 [配置指南](docs/配置指南.md)。
+
 ## 部署
 
 **宝塔服务器不使用 Docker 时，按 [宝塔非容器部署指南](docs/宝塔非容器部署.md) 操作**：Python 3.12 + uv 安装依赖，使用 `deploy/wecom-monitor.service` 管理服务，环境模板为 `deploy/baota-native.env.example`，宝塔 Nginx 代理到本机 8000 端口。前端可本地构建后上传。
 
 如需容器方案，见 [宝塔 Docker 部署指南](docs/宝塔部署.md)：使用独立的 `compose.baota.yaml`，环境模板为 `deploy/baota.env.example`。两种方案共用 `deploy/baota.nginx.conf` 反向代理片段。
 
-本期按单机部署，数据目录需要持久化。可使用公司现有 Python 服务和 HTTPS 反向代理，也可参考 `Dockerfile`、`compose.yaml` 和 `deploy/Caddyfile`。容器配置已提供，但本机未执行 Docker 构建或公网部署。
+本期按单机部署，数据目录需要持久化。可使用公司现有 Python 服务和 HTTPS 反向代理，也可参考 `Dockerfile`、`compose.yaml` 和 `deploy/Caddyfile`。已有源码同步发布及公网核对记录，见 [带鱼屏版本部署与验证](docs/带鱼屏自适应优化与验证.md)；Docker 构建及容器部署尚无验收通过记录。
 
 默认 `compose.yaml` 由 Caddy 提供 HTTPS，启动前在 `.env` 中额外设置 `APP_DOMAIN=你的实际域名`（仅主机名），并将 `PUBLIC_ORIGIN` 设为同一域名的 HTTPS 地址。宝塔方案单独使用 `compose.baota.yaml`，无需 `APP_DOMAIN`。两份配置均覆盖容器内数据库和媒体路径为 `/app/data` 下的持久化路径。
 
