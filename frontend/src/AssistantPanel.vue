@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api } from './api'
 import AssistantData from './AssistantData.vue'
+import AssistantCharts from './AssistantCharts.vue'
 import { lockPageScroll } from './scrollLock'
 
 type Row = Record<string, any>
@@ -165,6 +166,7 @@ onBeforeUnmount(()=>{cancel();window.removeEventListener('resize',syncViewport);
           <div v-if="item.data.event_explanation && item.data.mode==='model'" class="assistant-event-check"><strong>系统识别依据</strong><p>{{item.data.event_explanation}}</p></div>
           <div class="assistant-answer-label">{{['groups','data'].includes(item.data.result_type)?'数据查询':item.data.mode==='model'?'模型分析':'规则查询结果'}}</div>
           <p class="assistant-answer-text">{{item.data.answer}}</p>
+          <AssistantCharts :data="item.data" :busy="busy || eventLoading" @query="sendData" />
           <AssistantData v-if="item.data.dataset" :data="item.data.dataset" :busy="busy || eventLoading" @query="sendData" @event="openEvent" />
           <section v-if="item.data.groups" class="assistant-groups" aria-label="当前主体群列表">
             <form class="assistant-group-filter" @submit.prevent="filterGroups(item.id)"><label :for="'group-keyword-'+item.id">群名包含</label><div><input :id="'group-keyword-'+item.id" v-model="groupSearches[item.id]" maxlength="100" placeholder="输入群名称关键词"><button class="secondary" :disabled="busy">筛选</button></div></form>
