@@ -306,6 +306,7 @@ main {
   gap:12px;
   margin-bottom:23px
 }
+.filter-scope {display:flex;align-items:flex-end;flex-wrap:wrap;gap:12px;width:100%;min-width:0}
 .filters select {
   min-width:200px
 }
@@ -697,7 +698,7 @@ main {
   backdrop-filter:blur(3px);
   display:grid;
   place-items:center;
-  z-index:100;
+  z-index:120;
   padding:20px;
   padding:max(12px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-right)) max(12px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left));
   min-width:0
@@ -718,6 +719,12 @@ main {
 .modal-header {display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border);flex:none}
 .modal-header h2 {min-width:0;overflow-wrap:anywhere;font-size:18px}
 .modal-body {min-height:0;min-width:0;overflow:auto;overscroll-behavior:contain;padding:0 24px 24px}
+@media(max-width:760px) {
+  .assistant-event-detail {padding:0}
+  .assistant-event-detail .modal {width:100%;height:100dvh;max-height:100dvh;border-radius:0;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
+  .assistant-event-detail .modal-header h2 {font-size:16px;flex:1}
+  .assistant-event-detail .modal-header .text-btn {flex-shrink:0}
+}
 .close {
   flex:none;
   width:44px;
@@ -1129,6 +1136,7 @@ button:focus-visible,input:focus-visible,select:focus-visible {outline:3px solid
   .assistant-open .mobile-nav {visibility:hidden}
 }
 .event-columns {display:none}
+.contact-list {container:contact-events / inline-size}
 @media(min-width:1800px) {
   main {max-width:none;padding-inline:clamp(40px,2vw,80px)}
   .app-shell {--font-caption:13px}
@@ -1141,14 +1149,6 @@ button:focus-visible,input:focus-visible,select:focus-visible {outline:3px solid
   .metric strong {font-size:44px}
   .chart {height:clamp(360px,32vh,520px)}
   .panel-title h2 {font-size:18px}
-  .contact-list .event-row,.event-columns {display:grid;grid-template-columns:44px minmax(0,1fr) 190px 16px;gap:24px}
-  .event-columns {align-items:center;padding:0 0 16px;border-bottom:1px solid var(--border);font-size:13px;color:var(--text-secondary)}
-  .contact-list .event-content,.event-column-main {display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);column-gap:40px;row-gap:4px;align-items:start}
-  .contact-list .event-content>strong {grid-column:1;grid-row:1}
-  .contact-list .event-content>p {grid-column:1;grid-row:2;margin:0}
-  .contact-list .employee-identity {grid-column:2;grid-row:1;margin:0;font-size:14px}
-  .contact-list .event-content>small {grid-column:2;grid-row:2;margin:0}
-  .contact-list .event-row time {font-size:14px;white-space:normal}
   .employee-filter {display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap}
   .employee-search label {min-width:260px}
   .employee-filter>label {min-width:240px;max-width:420px}
@@ -1166,4 +1166,71 @@ button:focus-visible,input:focus-visible,select:focus-visible {outline:3px solid
   .dashboard-content .rank-row strong {display:flex;align-items:baseline;gap:4px}
   .dashboard-content .rank-row strong small {display:inline;margin:0}
   .dashboard-content .rank-number {font-size:14px}
+}
+
+/* 列表筛选按卡片的实际宽度排版，兼容侧边助手打开后主内容变窄。 */
+.filters.list-filters {display:block;container:list-filter / inline-size;padding:20px;margin-bottom:20px}
+.list-filters .filter-scope {display:grid;grid-template-columns:220px minmax(0,1fr);gap:20px;max-width:1060px}
+.list-filters label {min-width:0;width:auto;flex:none;gap:8px}
+.list-filters input,.list-filters select {width:100%;min-width:0;height:42px}
+.list-filters .inherited-range {display:flex;flex-direction:column;gap:8px;min-width:0;margin:0}
+.list-filters .filter-label {font-size:12px;color:var(--text-secondary)}
+.list-filters .range-controls {display:flex;align-items:center;gap:20px;min-height:42px;flex-wrap:wrap}
+.list-filters .range-controls>span {font-size:14px;color:var(--text-primary)}
+.list-filters .text-btn {width:auto;margin:0;text-align:center;white-space:nowrap;min-height:42px;padding:8px 12px}
+.list-filters .range-controls .text-btn {color:var(--action)}
+.list-filters .detail-toolbar {display:block;margin:20px 0 0;padding-top:20px;border-top:1px solid var(--border)}
+.list-filters .employee-filter {display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:20px;max-width:860px;width:100%;align-items:end}
+.list-filters .employee-filter.has-add-way {grid-template-columns:minmax(0,1.6fr) minmax(0,1fr) minmax(0,.75fr);max-width:1060px}
+.list-filters .employee-filter>label {min-width:0;max-width:none}
+.list-filters .employee-search {display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;align-items:end;min-width:0}
+.list-filters .employee-search label {min-width:0}
+.list-filters .employee-search button {height:42px;padding-inline:14px}
+.list-filters .group-toolbar {display:grid;grid-template-columns:minmax(0,1fr) minmax(200px,.7fr);gap:20px;max-width:860px;align-items:end}
+.list-filters .tabs {width:fit-content;max-width:100%;min-height:42px;flex-wrap:wrap}
+.list-filters .tabs button {min-height:34px;flex:1;white-space:nowrap}
+.list-filters .filter-feedback {display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-top:12px;color:var(--text-secondary);font-size:12px}
+.list-summary {display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+.list-summary h2 {font-size:14px;font-weight:500}
+.list-summary>span {font-size:12px;color:var(--text-secondary)}
+.app-shell main.paged-main {display:flex;flex-direction:column;min-height:100dvh;padding-bottom:calc(var(--bottom-nav-height,0px) + 12px)}
+.paged-main>* {flex-shrink:0}
+.paged-main .pagination-space {margin-top:0}
+.paged-main .page-footer {margin-top:auto;padding:24px 0 0;gap:12px}
+.page-footer span {max-width:none;text-align:left}
+
+@container list-filter (max-width:850px) {
+  .list-filters .employee-filter.has-add-way {grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .list-filters .has-add-way .employee-search {grid-column:1 / -1;max-width:560px;width:100%}
+}
+@container list-filter (max-width:550px) {
+  .list-filters .filter-scope {grid-template-columns:minmax(0,1fr);gap:16px}
+  .list-filters .range-controls {gap:4px 12px;justify-content:space-between}
+  .list-filters .range-controls>span {font-size:13px}
+  .list-filters .range-controls .text-btn {min-height:36px;padding:6px 0}
+  .list-filters .employee-filter,.list-filters .employee-filter.has-add-way {grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+  .list-filters .employee-search {grid-column:1 / -1}
+  .list-filters .employee-filter:not(.has-add-way) .employee-choice {grid-column:1 / -1}
+  .list-filters .group-toolbar {grid-template-columns:minmax(0,1fr);gap:16px}
+  .list-filters .employee-search {grid-template-columns:minmax(0,1fr) auto auto}
+  .list-filters .employee-search button {min-width:0;padding-inline:12px}
+  .list-filters .employee-search .text-btn {padding-inline:8px}
+  .list-filters .tabs {width:100%}
+  .list-filters .tabs button {padding-inline:8px}
+}
+@media(max-width:760px) {
+  .filters.list-filters {padding:16px}
+  .list-summary {flex-wrap:wrap}
+}
+
+/* 表头与数据行共用列宽；按列表实际宽度决定是否展示，避免助手展开后挤压列。 */
+@container contact-events (min-width:860px) {
+  .contact-list .event-row,.contact-list .event-columns {display:grid;grid-template-columns:44px minmax(0,1fr) 176px 16px;gap:24px}
+  .contact-list .event-columns {align-items:center;min-height:52px;margin-inline:-22px;padding:14px 22px;border-bottom:1px solid var(--border);border-radius:var(--radius-card) var(--radius-card) 0 0;background:var(--bg-subtle);color:var(--text-primary);font-size:15px;font-weight:600;line-height:24px}
+  .contact-list .event-content,.contact-list .event-column-main {display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);column-gap:40px;row-gap:6px;align-items:start;min-width:0}
+  .contact-list .event-content>strong {grid-column:1;grid-row:1;font-size:15px;line-height:24px;font-weight:500}
+  .contact-list .event-content>p {grid-column:1;grid-row:2;margin:0;font-size:13px;line-height:20px}
+  .contact-list .employee-identity {grid-column:2;grid-row:1;margin:0;font-size:14px;line-height:24px}
+  .contact-list .event-content>small {grid-column:2;grid-row:2;margin:0;font-size:13px;line-height:20px}
+  .contact-list .event-row time {font-size:14px;line-height:24px;white-space:normal;font-variant-numeric:tabular-nums}
 }

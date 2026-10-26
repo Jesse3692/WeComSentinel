@@ -84,9 +84,10 @@ const origin = process.env.ASSISTANT_SMOKE_URL || 'http://127.0.0.1:8765';
     if(process.env.ASSISTANT_SCREENSHOT_DIR){await panel.locator('.assistant-log').evaluate(el=>{el.scrollTop=0});await page.screenshot({path:path.join(process.env.ASSISTANT_SCREENSHOT_DIR,'assistant-implemented-mobile.png')});}
     await panel.locator('.assistant-sources button').first().click();
     await page.getByRole('dialog',{name:'事件详情',exact:true}).waitFor();
-    assert.equal(await page.locator('.assistant-panel').count(),0);
+    assert.equal(await page.locator('.assistant-panel').count(),1);
+    assert.equal(await panel.getAttribute('inert'),'');
     await page.getByRole('button',{name:'关闭',exact:true}).click();
-    await page.getByRole('button',{name:'✦ AI 助手',exact:true}).click();
+    assert.equal(await panel.getAttribute('inert'),null);
     await panel.getByRole('button',{name:'关闭助手',exact:true}).click();
     await page.locator('.mobile-nav button').nth(4).click();
     await page.locator('.profile').getByRole('button',{name:'退出登录',exact:true}).click();

@@ -2,14 +2,16 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api } from './api'
 import AssistantData from './AssistantData.vue'
+import { lockPageScroll } from './scrollLock'
 
 type Row = Record<string, any>
 const props = defineProps<{
   open: boolean; tenantId: string; tenantName: string; startDate: string; endDate: string
-  eventId: number | null; userId: number
+  eventId: number | null; userId: number; suspended?: boolean
 }>()
-const emit = defineEmits<{close: []; event: [id: number]}>()
-const messages = ref<{id: number; question: string; data?: Row; error?: string}[]>([])
+const emit = defineEmits<{close: []; event: [event: Row, trigger: HTMLElement | null]}>()
+type Message = {id: number; question: string; request?: Row; data?: Row; error?: string}
+const messages = ref<Message[]>([])
 const text = ref(''), busy = ref(false), mode = ref('rules'), model = ref(''), enabled = ref(true)
 const input = ref<HTMLTextAreaElement | null>(null), log = ref<HTMLElement | null>(null)
 const panel = ref<HTMLElement | null>(null)
@@ -18,13 +20,16 @@ let originFocus: HTMLElement | null = null
 const overlay = ref(matchMedia('(max-width: 1100px)').matches)
 const viewportHeight = ref(window.visualViewport?.height || window.innerHeight)
 const viewportTop = ref(window.visualViewport?.offsetTop || 0)
-let locked = false, savedOverflow = ''
+let releaseScroll: (() => void) | undefined
+const eventLoading = ref(false), eventError = ref('')
+let eventController: AbortController | undefined, eventVersion = 0, lastEventId: number | null = null
+let lastEventTrigger: HTMLElement | null = null
 function syncViewport() {
   overlay.value=matchMedia('(max-width: 1100px)').matches
   viewportHeight.value=window.visualViewport?.height || window.innerHeight
   viewportTop.value=window.visualViewport?.offsetTop || 0
-  if(props.open && overlay.value && !locked){savedOverflow=document.body.style.overflow;document.body.style.overflow='hidden';locked=true}
-  if((!props.open || !overlay.value) && locked){document.body.style.overflow=savedOverflow;locked=false}
+  if(props.open && overlay.value && !releaseScroll)releaseScroll=lockPageScroll()
+  if(!props.open || !overlay.value){releaseScroll?.();releaseScroll=undefined}
 }
 const labels: Record<string,string> = {contact_added:'新增联系人',contact_deleted:'删除联系人',group_left:'主动退群',group_removed:'被移出群'}
 const scope = computed(()=>[props.userId,props.tenantId,props.startDate,props.endDate,props.eventId].join('|'))
@@ -34,19 +39,20 @@ const shortcuts = computed(()=>props.eventId
 const groupSearches = ref<Record<number,string>>({})
 const availableCapabilities=ref<Row[]>([]), dataChoice=ref('')
 
-function cancel() { version++; controller?.abort(); controller=undefined; busy.value=false }
-function reset() {cancel();messages.value=[];text.value='';groupSearches.value={}}
+function cancelEvent() {eventVersion++;eventController?.abort();eventController=undefined;eventLoading.value=false}
+function cancel() { version++; controller?.abort(); controller=undefined; busy.value=false;cancelEvent() }
+function reset() {cancel();messages.value=[];text.value='';groupSearches.value={};eventError.value='';lastEventId=null;lastEventTrigger=null}
 function close() {cancel();emit('close')}
 function newConversation() {reset();void nextTick(()=>input.value?.focus())}
-async function scroll() {await nextTick();log.value?.scrollTo({top:log.value.scrollHeight,behavior:'auto'})}
-async function send(question = text.value.trim(), groupQuery:Row = {}) {
+async function scroll() {await nextTick();if(!props.suspended)log.value?.scrollTo({top:log.value.scrollHeight,behavior:'auto'})}
+async function send(question = text.value.trim(), groupQuery:Row = {}, preserveDraft = false) {
   if(!question || busy.value || !enabled.value)return
   const history=messages.value.slice(-6).map(item=>item.question)
   const contextQuery=messages.value[messages.value.length-1]?.data?.query || null
   // Retain a bounded conversation only in this component, never in browser storage.
   if(messages.value.length>=20)messages.value.splice(0,messages.value.length-19)
-  const item={id:++sequence,question} as {id:number;question:string;data?:Row;error?:string}
-  messages.value.push(item);text.value='';busy.value=true
+  const item:Message={id:++sequence,question,request:groupQuery}
+  messages.value.push(item);if(!preserveDraft)text.value='';busy.value=true
   const current=++version, currentScope=scope.value
   controller=new AbortController()
   void scroll()
@@ -83,10 +89,35 @@ function sendData(query:Row) {
   void send('查询'+name,{query,event_id:null})
 }
 function chooseData() {if(dataChoice.value)sendData({capability:dataChoice.value})}
-async function retry(item: {id:number;question:string}) {
+async function retry(item: Message) {
   messages.value=messages.value.filter(row=>row.id!==item.id)
-  await send(item.question)
+  await send(item.question,item.request,true)
 }
+async function openEvent(id:number, trigger = document.activeElement as HTMLElement | null) {
+  // 加载期间按钮会禁用，必须提前保存焦点，不能等弹窗打开后再读取 activeElement。
+  lastEventTrigger=trigger
+  cancelEvent();eventError.value='';lastEventId=id;eventLoading.value=true
+  const current=eventVersion, currentScope=scope.value
+  eventController=new AbortController()
+  try {
+    const event=await api('/events/'+id,undefined,'GET',true,eventController.signal)
+    if(current!==eventVersion || currentScope!==scope.value || !props.open)return
+    emit('event',event,lastEventTrigger)
+  } catch(error:any) {
+    if(current!==eventVersion || currentScope!==scope.value || error.name==='AbortError')return
+    if(error.status===401){reset();close();return}
+    if(error.status===403){reset();lastEventId=id}
+    eventError.value=error.message
+  } finally {if(current===eventVersion){eventLoading.value=false;eventController=undefined}}
+}
+function retryEvent() {if(lastEventId!==null)void openEvent(lastEventId,lastEventTrigger)}
+function explainEvent(event:Row) {
+  if(busy.value || !enabled.value)return
+  // 单次请求指定事件及主体，不修改 props/scope，保留历史对话和未发送输入。
+  void send('解释事件 #'+event.id+' 的识别依据',
+    {event_id:event.id,tenant_id:String(event.tenant_id),query:null,context_query:null},true)
+}
+defineExpose({explainEvent,busy})
 async function loadConfig() {
   const currentScope=scope.value
   try {const config=await api('/assistant/config');if(currentScope!==scope.value)return;enabled.value=config.enabled;mode.value=config.mode;model.value=config.model||'';availableCapabilities.value=config.capabilities||[]}
@@ -99,6 +130,7 @@ watch(()=>props.open,async(open)=>{
   else {cancel();await nextTick();originFocus?.focus({preventScroll:true})}
 })
 function keyboard(event:KeyboardEvent) {
+  if(props.suspended)return
   if(event.key==='Escape'){event.preventDefault();close()}
   if(event.key!=='Tab' || !matchMedia('(max-width: 1100px)').matches)return
   const nodes=panel.value?.querySelectorAll<HTMLElement>('button:not(:disabled),textarea:not(:disabled),a[href]')
@@ -111,17 +143,19 @@ function submitKey(event:KeyboardEvent) {
   if(event.key==='Enter' && !event.shiftKey && !event.isComposing){event.preventDefault();void send()}
 }
 onMounted(()=>{syncViewport();window.addEventListener('resize',syncViewport);window.visualViewport?.addEventListener('resize',syncViewport);window.visualViewport?.addEventListener('scroll',syncViewport);if(props.open){void loadConfig();input.value?.focus()}})
-onBeforeUnmount(()=>{cancel();window.removeEventListener('resize',syncViewport);window.visualViewport?.removeEventListener('resize',syncViewport);window.visualViewport?.removeEventListener('scroll',syncViewport);if(locked)document.body.style.overflow=savedOverflow})
+onBeforeUnmount(()=>{cancel();window.removeEventListener('resize',syncViewport);window.visualViewport?.removeEventListener('resize',syncViewport);window.visualViewport?.removeEventListener('scroll',syncViewport);releaseScroll?.()})
 </script>
 
 <template>
-  <div v-if="open" class="assistant-backdrop" @click="close" aria-hidden="true"></div>
-  <section v-if="open" ref="panel" class="assistant-panel" :role="overlay?'dialog':'region'" :aria-modal="overlay?true:undefined" :style="{'--assistant-height':viewportHeight+'px','--assistant-top':viewportTop+'px'}" aria-label="客户分析助手" @keydown="keyboard">
+  <div v-if="open" class="assistant-backdrop" :inert="suspended" @click="close" aria-hidden="true"></div>
+  <section v-if="open" ref="panel" class="assistant-panel" :inert="suspended" :aria-hidden="suspended?true:undefined" :role="overlay?'dialog':'region'" :aria-modal="overlay && !suspended?true:undefined" :style="{'--assistant-height':viewportHeight+'px','--assistant-top':viewportTop+'px'}" aria-label="客户分析助手" @keydown="keyboard">
     <header class="assistant-header">
       <div><h2>✦ 客户分析助手</h2><p class="muted">{{mode==='model' ? model || '模型分析' : '规则查询模式'}}</p></div>
       <div class="assistant-header-actions"><button class="text-btn" :disabled="busy" @click="newConversation">新对话</button><button class="assistant-close secondary" @click="close" aria-label="关闭助手">×</button></div>
     </header>
     <div class="assistant-scope">{{tenantName}} · {{startDate && endDate ? startDate+' 至 '+endDate : '默认近 7 天'}}<span v-if="eventId"> · 事件 #{{eventId}}</span></div>
+    <p v-if="eventLoading" class="assistant-event-status" role="status">正在读取事件详情…</p>
+    <div v-if="eventError" class="assistant-event-status error" role="alert">{{eventError}} <button class="text-btn" :disabled="eventLoading" @click="retryEvent">重试事件详情</button></div>
     <div ref="log" class="assistant-log" role="log" aria-live="polite" aria-relevant="additions text">
       <div v-if="!messages.length" class="assistant-welcome"><h3>想了解哪些客户变化？</h3><p>我可以查询授权范围内的数据、解释事件，或生成报告草稿。</p><p class="muted">回答会附上统计区间和数据依据。</p></div>
       <article v-for="item in messages" :key="item.id" class="assistant-exchange">
@@ -131,7 +165,7 @@ onBeforeUnmount(()=>{cancel();window.removeEventListener('resize',syncViewport);
           <div v-if="item.data.event_explanation && item.data.mode==='model'" class="assistant-event-check"><strong>系统识别依据</strong><p>{{item.data.event_explanation}}</p></div>
           <div class="assistant-answer-label">{{['groups','data'].includes(item.data.result_type)?'数据查询':item.data.mode==='model'?'模型分析':'规则查询结果'}}</div>
           <p class="assistant-answer-text">{{item.data.answer}}</p>
-          <AssistantData v-if="item.data.dataset" :data="item.data.dataset" :busy="busy" @query="sendData" @event="emit('event',$event)" />
+          <AssistantData v-if="item.data.dataset" :data="item.data.dataset" :busy="busy || eventLoading" @query="sendData" @event="openEvent" />
           <section v-if="item.data.groups" class="assistant-groups" aria-label="当前主体群列表">
             <form class="assistant-group-filter" @submit.prevent="filterGroups(item.id)"><label :for="'group-keyword-'+item.id">群名包含</label><div><input :id="'group-keyword-'+item.id" v-model="groupSearches[item.id]" maxlength="100" placeholder="输入群名称关键词"><button class="secondary" :disabled="busy">筛选</button></div></form>
             <p class="muted">共 {{item.data.groups.total}} 个群<span v-if="item.data.groups.keyword"> · 关键词：{{item.data.groups.keyword}}</span></p>
@@ -142,7 +176,7 @@ onBeforeUnmount(()=>{cancel();window.removeEventListener('resize',syncViewport);
           <div v-if="!item.data.event_id" class="assistant-cards"><div v-for="card in item.data.cards" :key="card.type"><span>{{labels[card.type]}}</span><strong>{{card.value}} <small>人次</small></strong><small>较上期 {{card.delta>0?'+':''}}{{card.delta}}</small></div></div>
           <div v-for="(rows,kind) in item.data.rankings" :key="kind" class="assistant-rank"><strong>{{labels[kind]}} Top 5</strong><p v-if="!rows.length" class="muted">当前区间无排名数据</p><p v-for="(row,index) in rows" :key="row.tenant_id+':'+row.id">{{Number(index)+1}}. {{row.name}} <span>{{row.count}} 人次</span></p></div>
           <div class="assistant-citation"><template v-if="item.data.groups">数据来源：本地已同步群资料 · 不按统计日期筛选<br></template><template v-else-if="item.data.dataset"></template><template v-else-if="item.data.event_id">事件时间：{{new Date(item.data.event_occurred_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})}}<br></template><template v-else>统计区间：{{item.data.range.join(' 至 ')}}<br>对比区间：{{item.data.previous_range.join(' 至 ')}}<br></template>查询时间：{{new Date(item.data.updated_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})}}</div>
-          <div v-if="item.data.sources.length" class="assistant-sources"><p class="muted">{{item.data.sources_label}}</p><button v-for="source in item.data.sources" :key="source.event_id" class="text-btn" @click="emit('event',source.event_id)">{{source.label}} →</button></div>
+          <div v-if="item.data.sources.length" class="assistant-sources"><p class="muted">{{item.data.sources_label}}</p><button v-for="source in item.data.sources" :key="source.event_id" class="text-btn" :disabled="eventLoading" @click="openEvent(source.event_id)">{{source.label}} →</button></div>
         </div>
         <div v-else-if="item.error" class="error" role="alert">{{item.error}} <button class="text-btn" :disabled="busy" @click="retry(item)">重试</button></div>
         <p v-else class="assistant-progress" role="status">{{busy?'正在查询数据并生成回答…':'本次生成已停止'}} </p>
@@ -161,6 +195,7 @@ onBeforeUnmount(()=>{cancel();window.removeEventListener('resize',syncViewport);
 .assistant-header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:18px;border-bottom:1px solid var(--border);flex-shrink:0}
 .assistant-header h2{font-size:17px}.assistant-header p{margin-top:5px;overflow-wrap:anywhere}.assistant-header-actions{display:flex;align-items:center;gap:10px;flex-shrink:0}.assistant-close{font-size:22px;padding:4px 12px;min-height:40px}
 .assistant-scope{background:var(--bg-subtle);color:var(--text-secondary);padding:10px 18px;font-size:12px;overflow-wrap:anywhere;flex-shrink:0}
+.assistant-event-status{padding:10px 18px;font-size:13px;flex-shrink:0}
 .assistant-log{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:20px 18px;scrollbar-gutter:stable}
 .assistant-welcome{padding:16px 0}.assistant-welcome p{margin-top:12px;color:var(--text-secondary);line-height:1.7}.assistant-exchange+.assistant-exchange{margin-top:26px}
 .assistant-question{background:var(--bg-subtle);padding:12px;border-radius:12px 12px 3px 12px;max-width:94%;width:fit-content;margin:0 0 20px auto;overflow-wrap:anywhere;white-space:pre-wrap}

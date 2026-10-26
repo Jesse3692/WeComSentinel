@@ -47,7 +47,7 @@ for(const [x,date] of [[box.x+38,'2025-10-23'],[box.x+box.width-18,'2026-10-23']
 await page.locator('.trend-panel').screenshot({path:'artifacts/ui-fixes/cross-year-tooltip.png'});
 console.log('PASS same month/day in different years has distinct full tooltip dates');
 const nav=page.locator('.sidebar nav');
-await page.locator('.filters select').selectOption('2');await page.waitForTimeout(250);
+await page.locator('.filter-scope select').selectOption('2');await page.waitForTimeout(250);
 await nav.locator('button').nth(4).click();await page.waitForTimeout(200);
 const before=meCalls;profileMode='updated';
 await page.getByRole('button',{name:'刷新数据',exact:false}).click();
@@ -57,7 +57,7 @@ assert.equal(await page.locator('.profile-tenant').count(),1);
 assert.ok((await page.locator('.profile-tenant').innerText()).includes('更新后的主体'));
 await page.locator('.profile').screenshot({path:'artifacts/ui-fixes/profile-refreshed.png'});
 await nav.locator('button').first().click();await page.waitForTimeout(250);
-assert.equal(await page.locator('.filters select').inputValue(),'all','revoked selection falls back');
+assert.equal(await page.locator('.filter-scope select').inputValue(),'all','revoked selection falls back');
 await nav.locator('button').nth(4).click();await page.waitForTimeout(200);
 profileMode='error';await page.getByRole('button',{name:'刷新数据',exact:false}).click();
 await page.getByRole('alert').waitFor();assert.ok((await page.locator('.profile').innerText()).includes('刷新后的用户'));

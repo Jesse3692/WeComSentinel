@@ -29,10 +29,10 @@ await page.route('**/api/v1/**',async route=>{
  await route.fulfill({status,json:status===200?{data}:{error:{message:'simulated failure'}}});
 });
 await page.goto('http://localhost:8000');await page.locator('.metric').first().waitFor();
-await page.locator('.filters select').selectOption('1');await page.locator('.filters select').selectOption('2');await page.waitForTimeout(450);
+await page.locator('.filter-scope select').selectOption('1');await page.locator('.filter-scope select').selectOption('2');await page.waitForTimeout(450);
 assert.equal(preferencePeak,1);assert.equal(savedTenant,2);
 await page.locator('.admin-nav').click();await page.getByPlaceholder('主体名称',{exact:true}).fill('新主体');await page.getByPlaceholder('企业 CorpID').fill('test');await page.getByPlaceholder('凭据引用（大写）').fill('TEST');await page.getByRole('button',{name:'新增主体',exact:true}).click();await page.waitForTimeout(150);
-await page.locator('.sidebar nav button').first().click();await page.locator('.metric').first().waitFor();assert.equal(await page.locator('.filters select').inputValue(),'all');assert.ok((await page.locator('.filters select').innerText()).includes('新总部'));
+await page.locator('.sidebar nav button').first().click();await page.locator('.metric').first().waitFor();assert.equal(await page.locator('.filter-scope select').inputValue(),'all');assert.ok((await page.locator('.filter-scope select').innerText()).includes('新总部'));
 await page.locator('.metric').first().click();await page.locator('.event-row').first().waitFor();assert.ok((await page.locator('.inherited-range').innerText()).includes('2025-12-31'));
 await page.locator('.sidebar nav button').nth(3).click();await page.locator('.event-row .member-avatars').waitFor();assert.equal(await page.locator('.event-row .member-avatars .avatar').count(),2);
 await page.locator('.member-avatars img').first().waitFor();assert.equal(await page.locator('.member-avatars img').count(),2);

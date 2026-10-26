@@ -8,6 +8,7 @@ import { api, setCSRF, invalidateSession, sessionGeneration } from './api'
 import Avatar from './Avatar.vue'
 import NavIcon from './NavIcon.vue'
 import AssistantPanel from './AssistantPanel.vue'
+import { lockPageScroll } from './scrollLock'
 import { avatarRetryKey } from './avatarRetry'
 import { eventColor, chartColors, themeColor } from './theme/chart'
 import { hasMatchedMembers, memberStatus, memberNames, memberReason, groupEventLabel, groupClassificationNote, groupEvidenceText } from './groupEvidence'
@@ -28,19 +29,25 @@ const password = ref(''), demoRole = ref('admin'), error = ref(''), busy = ref(f
 const tenant = ref('all'), startDate = ref(''), endDate = ref(''), employee = ref(''), addWay = ref(''), groupSearch = ref('')
 const groupType = ref('group_left'), dashboard = ref<AnyRow | null>(null), records = ref<AnyRow[]>([])
 const nextCursor = ref<string | null>(null), totals = ref({records: 0, quantity: 0}), employees = ref<AnyRow[]>([])
+const isListPage = computed(()=>['added','deleted','groups'].includes(tab.value))
 const detail = ref<AnyRow | null>(null), adminTenants = ref<AnyRow[]>([]), users = ref<AnyRow[]>([]), jobs = ref<AnyRow[]>([])
 const assistantOpen = ref(false), assistantEvent = ref<AnyRow | null>(null)
+const assistantPanel = ref<InstanceType<typeof AssistantPanel> | null>(null)
+const detailFromAssistant = ref(false)
+let assistantEventTrigger: HTMLElement | null = null
 function openAssistant() {assistantEvent.value=null;assistantOpen.value=true}
 async function explainWithAssistant() {
   const event=detail.value
-  if(!event)return
+  if(!event || (assistantOpen.value && assistantPanel.value?.busy))return
+  const append=assistantOpen.value
   detail.value=null
   await nextTick()
+  if(append){assistantPanel.value?.explainEvent(event);return}
   assistantEvent.value={id:event.id,tenant_id:event.tenant_id};assistantOpen.value=true
 }
-async function assistantEventDetails(id:number) {
-  try {const event=await api('/events/'+id);assistantOpen.value=false;detail.value=event}
-  catch(e:any){assistantOpen.value=false;error.value=e.message}
+function assistantEventDetails(event:AnyRow, trigger:HTMLElement | null) {
+  assistantEventTrigger=trigger
+  detailFromAssistant.value=true;detail.value=event
 }
 const tenantForm = reactive({name: '', corp_id: '', credential_ref: '', enabled: true})
 const userForm = reactive({name: '', ding_corp_id: '', ding_user_id: ''})
@@ -97,7 +104,7 @@ function clearSession() {
   Object.assign(userForm,{name:'',ding_corp_id:'',ding_user_id:''})
   employee.value='';employeeKeyword.value='';appliedEmployeeKeyword.value='';pageNumber.value=1;pageCursors.value=[null];addWay.value='';groupSearch.value='';startDate.value='';endDate.value='';password.value=''
   pageError.value=''; employeeMore.value=false;employeeOffset.value=0; chart?.dispose(); resize?.disconnect()
-  if(document.body.style.overflow==='hidden') document.body.style.overflow=previousOverflow
+  releaseDetailScroll?.();releaseDetailScroll=undefined
 }
 async function login(demo = false) {
   if(busy.value || logoutPending.value) return
@@ -294,20 +301,21 @@ watch(employeeKeyword,()=>{
 watch(groupSearch,()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>void refresh(true),300)})
 const dialogEl = ref<HTMLElement | null>(null)
 let previousFocus: HTMLElement | null = null
-let previousOverflow = ''
+let releaseDetailScroll: (() => void) | undefined
 watch(detail, async (value, oldValue)=>{
   if(value && !oldValue) {
-    previousFocus = document.activeElement as HTMLElement
-    previousOverflow = document.body.style.overflow
-    document.body.style.overflow='hidden'
+    previousFocus = detailFromAssistant.value ? assistantEventTrigger : document.activeElement as HTMLElement
+    releaseDetailScroll=lockPageScroll()
     await nextTick(); dialogEl.value?.focus({preventScroll:true})
   } else if(!value && oldValue) {
-    document.body.style.overflow=previousOverflow
-    await nextTick(); previousFocus?.focus()
+    detailFromAssistant.value=false
+    assistantEventTrigger=null
+    releaseDetailScroll?.();releaseDetailScroll=undefined
+    await nextTick();if(previousFocus?.isConnected)previousFocus.focus({preventScroll:true})
   }
 })
 function dialogKey(e: KeyboardEvent) {
-  if(e.key==='Escape') {e.preventDefault();detail.value=null}
+  if(e.key==='Escape') {e.preventDefault();e.stopPropagation();detail.value=null}
   if(e.key!=='Tab') return
   const nodes=dialogEl.value?.querySelectorAll<HTMLElement>('button, input, select, a[href], [tabindex="0"]')
   if(!nodes?.length) {e.preventDefault();return}
@@ -334,7 +342,7 @@ onMounted(async()=>{
   catch(e:any){error.value=e.message}
   refreshTimer=setInterval(()=>{if(me.value && tab.value==='dashboard' && !loading.value && !document.hidden)void refresh()},30000)
 })
-onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();dockObserver?.disconnect();clearTimeout(searchTimer);clearTimeout(employeeSearchTimer);clearInterval(refreshTimer);window.removeEventListener('session-expired',expired)})
+onBeforeUnmount(()=>{releaseDetailScroll?.();chart?.dispose();resize?.disconnect();dockObserver?.disconnect();clearTimeout(searchTimer);clearTimeout(employeeSearchTimer);clearInterval(refreshTimer);window.removeEventListener('session-expired',expired)})
 </script>
 
 <template>
@@ -364,22 +372,42 @@ onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();dockObserver?.disconn
     </section>
   </div>
   <div v-else class="app-shell" :class="{'assistant-open':assistantOpen}" :style="{'--bottom-nav-height':bottomNavHeight+'px'}" @touchstart.passive="pullStart" @touchend.passive="pullEnd">
-    <aside class="sidebar">
+    <aside class="sidebar" :inert="!!detail">
       <div class="brand"><span class="brandmark">◫</span><div>关系观察台<small>CLIENT INSIGHT</small></div></div>
       <p class="nav-label">工作空间</p>
       <nav><button v-for="n in nav" :key="n.id" :class="{active:tab===n.id}" @click="tab=n.id"><NavIcon :name="n.id" />{{n.name}}<i v-if="tab===n.id">●</i></button></nav>
       <button v-if="me.role==='admin'" class="admin-nav" :class="{active:tab==='admin'}" @click="tab='admin'">⚙ 主体与权限管理</button>
       <div class="sidebar-bottom"><Avatar :name="me.name" :url="me.avatar_url" /><div><span class="sidebar-user-name" :title="me.name">{{me.name}}</span><small>{{me.role==='admin'?'管理员':'授权用户'}}</small></div><button class="text-btn" @click="logout" title="退出登录">↗</button></div>
     </aside>
-    <main :class="{'paged-main':['added','deleted','groups'].includes(tab)}">
+    <main :inert="!!detail" :class="{'paged-main':['added','deleted','groups'].includes(tab)}">
       <header class="topbar"><span>工作台 <span class="slash">/</span> {{tab==='admin'?'配置管理':nav.find(n=>n.id===tab)?.name}}</span><div class="topbar-actions"><span class="environment"><span class="dot"></span>{{config.demo_enabled?'本地演示环境':'企业工作空间'}}</span><button class="secondary assistant-entry" :aria-expanded="assistantOpen" @click="openAssistant">✦ AI 助手</button></div></header>
       <section class="page-heading"><div><p class="eyebrow">{{tab==='dashboard'?'OVERVIEW':'WORKSPACE'}}</p><h1>{{tab==='dashboard'?'客户关系汇总':tab==='admin'?'主体与权限管理':tab==='me'?'个人中心':tab==='groups'?'群成员变更':tab==='added'?'新增联系人':'删除联系人'}}</h1><p class="muted">{{tab==='dashboard'?'看见增长，也看见每一次流失。':tab==='admin'?'管理接入配置、访问范围与事件处理任务。':'所有记录按主体授权展示，时间统一为北京时间。'}}</p></div><button class="secondary" :disabled="loading" @click="refreshWithAvatars()">↻ {{loading?'更新中…':'刷新数据'}}</button></section>
       <div v-if="config.demo_enabled" class="demo-banner">演示模式：页面数据由本地种子生成，不代表真实企业数据或平台联调结果。</div>
       <p v-if="loading" class="loading-status" role="status">正在更新数据，网络较慢时请稍候…</p><div v-if="error" class="error" role="alert">{{error}} <button class="text-btn" @click="refreshWithAvatars()">重试</button></div>
-      <section v-if="!['me','admin'].includes(tab)" class="filters">
-        <label>当前主体<select v-model="tenant"><option value="all">全部授权主体</option><option v-for="t in me.tenants" :key="t.id" :value="String(t.id)">{{t.name}}</option></select></label>
+      <section v-if="!['me','admin'].includes(tab)" class="filters" :class="{'list-filters':isListPage}" aria-label="数据筛选">
+        <div class="filter-scope">
+        <label>当前主体<select v-model="tenant" aria-label="当前主体"><option value="all">全部授权主体</option><option v-for="t in me.tenants" :key="t.id" :value="String(t.id)">{{t.name}}</option></select></label>
         <template v-if="tab==='dashboard'"><label>开始日期<input v-model="startDate" type="date" aria-label="开始日期"></label><span class="date-sep">—</span><label>结束日期<input v-model="endDate" type="date" aria-label="结束日期"></label>
-        <button class="text-btn" @click="startDate='';endDate=''">恢复默认</button><span class="filter-note">默认近 7 天 · 趋势近 30 天</span></template><div v-else class="inherited-range">统计区间：{{effectiveRange.length===2 ? effectiveRange.join(' 至 ') : (loading ? '正在读取' : '未取得有效日期')}} <button class="text-btn" @click="tab='dashboard'">调整日期筛选 →</button></div>
+        <button class="text-btn" @click="startDate='';endDate=''">恢复默认</button><span class="filter-note">默认近 7 天 · 趋势近 30 天</span></template>
+        <div v-else class="inherited-range"><span class="filter-label">统计区间</span><div class="range-controls"><span>{{effectiveRange.length===2 ? effectiveRange.join(' 至 ') : (loading ? '正在读取' : '未取得有效日期')}}</span><button class="text-btn" @click="tab='dashboard'">调整日期 →</button></div></div>
+        </div>
+        <div v-if="isListPage" class="detail-toolbar" :class="{'group-toolbar':tab==='groups'}">
+          <template v-if="tab==='groups'">
+            <div class="tabs" aria-label="群变更类型"><button v-for="t in ['group_left','group_removed','group_change_unknown']" :class="{selected:groupType===t}" @click="groupType=t">{{labels[t]}}</button></div>
+            <label class="group-search">搜索群名称<input v-model="groupSearch" type="search" placeholder="输入群名称" aria-label="群名称搜索"></label>
+          </template>
+          <div v-else class="employee-filter" :class="{'has-add-way':tab==='added'}">
+            <form class="employee-search" @submit.prevent="searchEmployeesNow">
+              <label>搜索员工<input v-model="employeeKeyword" type="search" maxlength="100" placeholder="员工姓名或 ID" aria-label="搜索员工"></label>
+              <button class="secondary" type="submit">搜索</button><button class="text-btn" type="button" @click="clearEmployeeSearch">清空</button>
+            </form>
+            <label class="employee-choice">指定员工（可选）<select v-model="employee" aria-label="指定员工"><option value="">全部员工</option><option v-for="e in employees" :key="e.tenant_id+':'+e.id" :value="JSON.stringify([e.tenant_id,e.id])">{{e.name}} · {{tenantName(e.tenant_id)}}</option></select></label>
+            <label v-if="tab==='added'" class="add-way-filter">添加方式<select v-model="addWay"><option value="">全部方式</option><option value="1">扫描二维码</option><option value="2">搜索手机号</option><option value="3">名片分享</option><option value="4">群聊添加</option><option value="5">手机通讯录</option><option value="6">微信联系人</option><option value="other">其他</option><option value="unknown">未知</option></select></label>
+          </div>
+        </div>
+        <div v-if="isListPage && (appliedEmployeeKeyword && !employee && tab!=='groups' || employeeMore && tab!=='groups')" class="filter-feedback">
+          <span v-if="appliedEmployeeKeyword && !employee">正在按“{{appliedEmployeeKeyword}}”筛选记录</span><button v-if="employeeMore" class="text-btn" @click="loadEmployees(true)">更多员工</button>
+        </div>
       </section>
       <template v-if="tab==='dashboard'">
         <div v-if="!dashboard && loading" class="empty">正在加载汇总…</div>
@@ -391,7 +419,7 @@ onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();dockObserver?.disconn
         </div>
       </template>
       <template v-else-if="['added','deleted','groups'].includes(tab)">
-        <section class="detail-toolbar"><div v-if="tab==='groups'" class="tabs"><button v-for="t in ['group_left','group_removed','group_change_unknown']" :class="{selected:groupType===t}" @click="groupType=t">{{labels[t]}}</button></div><div v-else class="employee-filter"><form class="employee-search" @submit.prevent="searchEmployeesNow"><label>搜索员工<input v-model="employeeKeyword" type="search" maxlength="100" placeholder="输入员工姓名或ID筛选记录" aria-label="搜索员工"></label><button class="secondary" type="submit">搜索</button><button class="text-btn" type="button" @click="clearEmployeeSearch">清空</button></form><label>指定员工（可选）<select v-model="employee" aria-label="指定员工"><option value="">全部员工</option><option v-for="e in employees" :key="e.tenant_id+':'+e.id" :value="JSON.stringify([e.tenant_id,e.id])">{{e.name}} · {{tenantName(e.tenant_id)}}</option></select></label><small v-if="appliedEmployeeKeyword && !employee" class="muted">正在按“{{appliedEmployeeKeyword}}”筛选记录</small></div><button v-if="employeeMore && tab!=='groups'" class="text-btn" @click="loadEmployees(true)">更多员工</button><label v-if="tab==='added'">添加方式<select v-model="addWay"><option value="">全部方式</option><option value="1">扫描二维码</option><option value="2">搜索手机号</option><option value="3">名片分享</option><option value="4">群聊添加</option><option value="5">手机通讯录</option><option value="6">微信联系人</option><option value="other">其他</option><option value="unknown">未知</option></select></label><input v-if="tab==='groups'" v-model="groupSearch" placeholder="搜索群名称" aria-label="群名称搜索"><span class="muted">{{totals.records}} 条记录 · {{totals.quantity}} 人次</span></section>
+        <div class="list-summary"><h2>筛选结果</h2><span role="status">{{totals.records}} 条记录 · {{totals.quantity}} 人次</span></div>
         <p v-if="tab==='groups' && groupType==='group_change_unknown'" class="muted">这里保留内部员工变更，以及客户身份或退出原因证据不足的记录。已识别的外部客户按主动退群、被移出群分类。</p>
         <section ref="eventListEl" class="panel event-list" :class="{'contact-list':tab!=='groups'}"><div v-if="tab!=='groups'" class="event-columns" aria-hidden="true"><span></span><div class="event-column-main"><span>客户与关系变化</span><span>员工与主体</span></div><span>发生时间</span><span></span></div><div v-if="!records.length && !error" class="empty"><span>◎</span><h3>{{loading?'正在加载…':'暂无数据'}}</h3><p>调整主体或日期范围后再试</p></div><button v-for="e in records" :key="e.id" class="event-row" @click="detail=e"><div v-if="isGroupEvent(e) && hasMatchedMembers(e)" class="member-avatars"><Avatar v-for="m in e.snapshot.member_candidates.slice(0,3)" :key="m.member_id" :name="m.name" :media-id="m.media_id" /><span v-if="e.quantity>3">+{{e.quantity-3}}</span></div><Avatar v-else :name="isGroupEvent(e) ? (e.resolution==='exact' ? e.snapshot.customer_name : '?') : e.snapshot.customer_name" :media-id="!isGroupEvent(e) || e.resolution==='exact' ? e.snapshot.customer_media_id : undefined" :warm="tab==='deleted'" /><div class="event-content"><strong>{{isGroupEvent(e) ? ((e.resolution==='exact' || hasMatchedMembers(e)) ? memberNames(e) : '成员待核实') : memberNames(e)}} <span v-if="e.quantity>1" class="badge">{{e.quantity}} 人次</span></strong><p v-if="e.event_type==='contact_added'">由 {{e.snapshot.employee_name}} 添加 · {{addWayLabel(e.add_way)}}</p><p v-else-if="e.event_type==='contact_deleted'">{{e.deletion_direction==='customer_deleted_employee'?'客户删除了员工':e.deletion_direction==='employee_deleted_customer'?'员工删除了客户':'删除方向未提供'}} · {{e.snapshot.employee_name}}</p><p v-else>{{eventLabel(e)}} · {{groupName(e)}}<span v-if="e.operator_id"> · 操作人 {{e.operator_id}}</span></p><div v-if="!isGroupEvent(e)" class="employee-identity"><Avatar :name="e.snapshot.employee_name" :media-id="e.snapshot.employee_media_id" /><span>员工 · {{e.snapshot.employee_name || e.employee_id || '未提供'}}</span></div><small>{{tenantName(e.tenant_id)}}<span v-if="e.resolution!=='exact'"> · {{memberStatus(e)}}{{hasMatchedMembers(e) ? '（系统比对推断）' : ''}}</span><span v-if="e.enrichment_status!=='complete'"> · 资料待补全</span><span v-if="e.channel_state"> · 渠道 {{e.channel_state}}</span></small></div><time>{{dateText(e.occurred_at)}}</time><span class="muted">›</span></button></section>
         <p v-if="pageError" class="error" role="alert">{{pageError}}</p><div ref="paginationHost" class="pagination-space"><nav ref="paginationEl" class="pagination" :style="paginationStyle" aria-label="记录分页"><span class="page-summary" role="status">第 {{pageNumber}} / {{totalPages}} 页 · 共 {{totals.records}} 条</span><label>每页<select v-model="pageSize" aria-label="每页记录数"><option value="10">10 条</option><option value="20">20 条</option><option value="50">50 条</option></select></label><div class="page-actions"><button class="secondary" :disabled="loading || pageNumber===1" @click="changePage(-1)">上一页</button><button class="secondary" :disabled="loading || !nextCursor" @click="changePage(1)">下一页</button></div></nav></div>
@@ -402,19 +430,19 @@ onBeforeUnmount(()=>{chart?.dispose();resize?.disconnect();dockObserver?.disconn
         <section class="panel admin-panel"><h2>用户与授权</h2><form class="admin-form" @submit.prevent="createUser"><input v-model="userForm.name" placeholder="用户姓名" required><input v-model="userForm.ding_corp_id" placeholder="钉钉 CorpID" required><input v-model="userForm.ding_user_id" placeholder="钉钉 UserID" required><button class="primary" :disabled="busy">新增用户</button></form><div v-for="u in users" :key="u.id" class="admin-item"><strong>{{u.name}}</strong><span class="muted"> · {{u.ding_user_id}}</span><p v-if="u.role==='admin'">管理员可访问所有启用主体</p><template v-else><div class="grant-options"><label v-for="t in adminTenants"><input type="checkbox" :value="t.id" v-model="u.tenant_ids">{{t.name}}</label></div><button class="secondary" :disabled="busy" @click="saveGrants(u)">保存授权</button></template></div></section>
         <section class="panel admin-panel"><h2>最近处理任务</h2><p class="muted">最多显示最近 100 条。失败任务在修复配置后可重新排队。</p><div v-if="!jobs.length" class="empty small">暂无处理任务</div><div v-for="j in jobs" class="job-row"><span>#{{j.id}} · 主体 {{j.tenant_id}}</span><span class="badge">{{j.status}}</span><span>{{j.attempts}} 次尝试</span><code>{{j.last_error}}</code><button v-if="['failed','retry'].includes(j.status)" class="secondary" :disabled="busy" @click="mutation('/admin/jobs/'+j.id+'/retry',{})">重试</button></div></section>
       </template>
-      <footer class="page-footer">关系观察台 <span>数据按北京时间统计 · 每 30 秒更新汇总</span></footer>
+      <footer class="page-footer"><span>数据按北京时间统计</span><span v-if="tab==='dashboard'">每 30 秒更新汇总</span></footer>
       <div v-if="['added','deleted','groups'].includes(tab)" class="pagination-reserve" :style="{height:paginationHeight+'px'}" aria-hidden="true"></div>
     </main>
-    <nav ref="mobileNavEl" class="mobile-nav"><button v-for="n in nav" :key="n.id" :class="{active:tab===n.id}" @click="tab=n.id"><NavIcon :name="n.id" />{{n.name}}</button></nav>
-    <AssistantPanel :key="[me.id,me.role,...me.tenants.map((t:AnyRow)=>t.id)].join(':')" :open="assistantOpen" :user-id="me.id"
+    <nav ref="mobileNavEl" class="mobile-nav" :inert="!!detail"><button v-for="n in nav" :key="n.id" :class="{active:tab===n.id}" @click="tab=n.id"><NavIcon :name="n.id" />{{n.name}}</button></nav>
+    <AssistantPanel ref="assistantPanel" :suspended="!!detail" :key="[me.id,me.role,...me.tenants.map((t:AnyRow)=>t.id)].join(':')" :open="assistantOpen" :user-id="me.id"
       :tenant-id="assistantEvent ? String(assistantEvent.tenant_id) : tenant" :tenant-name="assistantEvent ? tenantName(assistantEvent.tenant_id) : tenant==='all'?'全部授权主体':tenantName(Number(tenant))"
       :start-date="startDate || effectiveRange[0] || ''" :end-date="endDate || effectiveRange[1] || ''" :event-id="assistantEvent?.id || null"
       @close="assistantOpen=false" @event="assistantEventDetails" />
-    <div v-if="detail" class="modal-backdrop" @click.self="detail=null">
+    <div v-if="detail" class="modal-backdrop" :class="{'assistant-event-detail':detailFromAssistant}" @click.self="detail=null">
       <section ref="dialogEl" class="modal" tabindex="-1" @keydown="dialogKey" role="dialog" aria-modal="true" aria-label="事件详情">
-        <header class="modal-header"><h2>{{eventLabel(detail)}}</h2><button class="close" @click="detail=null" aria-label="关闭">×</button></header>
+        <header class="modal-header"><button v-if="detailFromAssistant" class="text-btn" @click="detail=null">← 返回助手</button><h2>{{eventLabel(detail)}}</h2><button class="close" @click="detail=null" aria-label="关闭">×</button></header>
         <div class="modal-body">
-        <button class="secondary event-assistant-entry" @click="explainWithAssistant">✦ 让助手解释</button>
+        <button class="secondary event-assistant-entry" :disabled="assistantOpen && assistantPanel?.busy" @click="explainWithAssistant">✦ 让助手解释</button>
         <dl>
           <dt>所属主体</dt><dd>{{tenantName(detail.tenant_id)}}</dd>
           <dt>发生时间</dt><dd>{{dateText(detail.occurred_at)}}</dd>

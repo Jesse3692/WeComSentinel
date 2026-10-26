@@ -40,7 +40,7 @@ const assert = require('node:assert/strict');
   await page.getByLabel('演示密码').fill(password);
   await page.getByRole('button',{name:'进入演示',exact:true}).click();
   await page.locator('.metric').first().waitFor();
-  assert.equal(await page.locator('.filters select option').count(),2);
+  assert.equal(await page.locator('.filter-scope select option').count(),2);
   const forbidden = await page.evaluate(async()=> (await fetch('/api/v1/admin/users')).status);
   assert.equal(forbidden,403);
   assert.deepEqual(errors,[]);

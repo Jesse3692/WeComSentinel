@@ -1,6 +1,6 @@
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE);
 const assert=require('node:assert/strict');const fs=require('node:fs');
-const out='artifacts/contact-search-pages';fs.mkdirSync(out,{recursive:true});
+const out=process.env.UI_ARTIFACT_DIR || 'artifacts/contact-search-pages';fs.mkdirSync(out,{recursive:true});
 (async()=>{const browser=await chromium.launch({headless:true,channel:'msedge'});try{
  const page=await browser.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
  const employees=[{id:'staff-A',name:'张三',tenant_id:1},{id:'staff-B',name:'李四',tenant_id:1},{id:'staff-C',name:'王五',tenant_id:1}];
@@ -22,7 +22,7 @@ const out='artifacts/contact-search-pages';fs.mkdirSync(out,{recursive:true});
   }
   await route.fulfill({json:{data}});
  });
- await page.goto('http://localhost:8000');await page.locator('.app-shell').waitFor();
+ await page.goto(process.env.UI_SMOKE_URL || 'http://localhost:8000');await page.locator('.app-shell').waitFor();
  const waitSummary=async text=>{await page.locator('.page-summary').filter({hasText:text}).waitFor();await page.waitForFunction(()=>!document.querySelector('.loading-status'));};
  for(const width of [1440,393]){
   await page.setViewportSize({width,height:850});
