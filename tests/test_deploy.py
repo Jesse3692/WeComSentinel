@@ -1,4 +1,5 @@
 """Deployment checks without contacting a real server."""
+
 import importlib.util
 from pathlib import Path
 import sys
@@ -95,8 +96,9 @@ def test_ssh_config_and_bootstrap():
         sync.connection({**config, "remote_dir": "/root/../etc"})
 
 
-@pytest.mark.parametrize("body,success", [(b'{"status":"ready"}', True),
-                                         (b'{"status":"starting"}', False)])
+@pytest.mark.parametrize(
+    "body,success", [(b'{"status":"ready"}', True), (b'{"status":"starting"}', False)]
+)
 def test_ready_check_requires_ready_and_stops_failed_service(monkeypatch, body, success):
     commands = []
     monkeypatch.setattr(update, "run", lambda command: commands.append(command))

@@ -1,4 +1,5 @@
 """Mutable callback events must not leave paged counts on an older snapshot."""
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import test_system
@@ -20,17 +21,27 @@ async def test_cursor_recounts_existing_events_after_retry_reclassification(syst
     assert first["total_records"] == first["total_quantity"] == 1
     async with app.state.sessions() as db:
         pending = await db.get(BusinessEvent, pending_id)
-    snapshot = {"group_name": "客户群", "member_evidence": "snapshot_difference",
-                "reported_event_type": "group_left", "member_candidates": [
-                    {"member_id": "a", "name": "客户甲", "member_type": 2},
-                    {"member_id": "b", "name": "客户乙", "member_type": 2},
-                    {"member_id": "staff", "name": "员工", "member_type": 1}]}
-    await app.state.worker.write_events(1, pending.callback_id,
-        group_records(snapshot, 3, pending.occurred_at, "chat1"), replace_group=True)
+    snapshot = {
+        "group_name": "客户群",
+        "member_evidence": "snapshot_difference",
+        "reported_event_type": "group_left",
+        "member_candidates": [
+            {"member_id": "a", "name": "客户甲", "member_type": 2},
+            {"member_id": "b", "name": "客户乙", "member_type": 2},
+            {"member_id": "staff", "name": "员工", "member_type": 1},
+        ],
+    }
+    await app.state.worker.write_events(
+        1,
+        pending.callback_id,
+        group_records(snapshot, 3, pending.occurred_at, "chat1"),
+        replace_group=True,
+    )
     await insert_event(app, tenant=2, kind="group_left", quantity=100)
     await insert_event(app, kind="group_left", quantity=50)
-    refreshed = (await client.get("/api/v1/events", params={
-        **params, "cursor": first["page_cursor"]})).json()["data"]
+    refreshed = (
+        await client.get("/api/v1/events", params={**params, "cursor": first["page_cursor"]})
+    ).json()["data"]
     assert refreshed["total_records"] == len(refreshed["items"]) == 2
     assert refreshed["total_quantity"] == sum(row["quantity"] for row in refreshed["items"]) == 3
     assert {row["tenant_id"] for row in refreshed["items"]} == {1}
@@ -43,18 +54,46 @@ async def test_cursor_recounts_removed_remainder_without_adding_new_events(syste
         db.add(inbox)
         await db.flush()
         callback_id = inbox.id
-        db.add_all([BusinessEvent(tenant_id=1, callback_id=callback_id, item_key=key,
-            event_type=kind, group_id="chat1", occurred_at=now_ms(), quantity=count, snapshot={})
-            for key, kind, count in [("group", "group_left", 2),
-                                     ("group_other", "group_change_unknown", 1)]])
+        db.add_all(
+            [
+                BusinessEvent(
+                    tenant_id=1,
+                    callback_id=callback_id,
+                    item_key=key,
+                    event_type=kind,
+                    group_id="chat1",
+                    occurred_at=now_ms(),
+                    quantity=count,
+                    snapshot={},
+                )
+                for key, kind, count in [
+                    ("group", "group_left", 2),
+                    ("group_other", "group_change_unknown", 1),
+                ]
+            ]
+        )
         await db.commit()
     await login(client)
     first = (await client.get("/api/v1/events")).json()["data"]
     assert first["total_records"] == 2 and first["total_quantity"] == 3
-    await app.state.worker.write_events(1, callback_id, [{"item_key": "group",
-        "event_type": "group_left", "group_id": "chat1", "occurred_at": now_ms(),
-        "quantity": 3, "snapshot": {}}], replace_group=True)
-    data = (await client.get("/api/v1/events", params={"cursor": first["page_cursor"]})).json()["data"]
+    await app.state.worker.write_events(
+        1,
+        callback_id,
+        [
+            {
+                "item_key": "group",
+                "event_type": "group_left",
+                "group_id": "chat1",
+                "occurred_at": now_ms(),
+                "quantity": 3,
+                "snapshot": {},
+            }
+        ],
+        replace_group=True,
+    )
+    data = (await client.get("/api/v1/events", params={"cursor": first["page_cursor"]})).json()[
+        "data"
+    ]
     assert data["total_records"] == len(data["items"]) == 1
     assert data["total_quantity"] == data["items"][0]["quantity"] == 3
 
@@ -70,8 +109,9 @@ async def test_empty_later_page_keeps_live_totals(system):
         row = await db.get(BusinessEvent, ids[0])
         row.event_type = "group_change_unknown"
         await db.commit()
-    page = (await client.get("/api/v1/events", params={
-        **params, "cursor": first["next_cursor"]})).json()["data"]
+    page = (
+        await client.get("/api/v1/events", params={**params, "cursor": first["next_cursor"]})
+    ).json()["data"]
     assert page["items"] == [] and page["next_cursor"] is None
     assert page["total_records"] == page["total_quantity"] == 2
 

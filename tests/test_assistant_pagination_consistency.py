@@ -1,4 +1,5 @@
 """Assistant event pages use one database snapshot for counts and rows."""
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import test_system
@@ -9,8 +10,10 @@ system = test_system.system
 
 
 async def event_page(client, query):
-    response = await client.post("/api/v1/assistant/chat", json={
-        "message": "查询事件", "query": {"capability": "events", **query}})
+    response = await client.post(
+        "/api/v1/assistant/chat",
+        json={"message": "查询事件", "query": {"capability": "events", **query}},
+    )
     assert response.status_code == 200, response.text
     return response.json()["data"]["dataset"]
 

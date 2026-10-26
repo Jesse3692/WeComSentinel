@@ -1,6 +1,14 @@
 import time
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, Integer, LargeBinary, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -25,7 +33,10 @@ class Tenant(Base):
 
 class User(Base):
     __tablename__ = "app_users"
-    __table_args__ = (UniqueConstraint("ding_corp_id", "ding_user_id"), CheckConstraint("role IN ('admin','user')"))
+    __table_args__ = (
+        UniqueConstraint("ding_corp_id", "ding_user_id"),
+        CheckConstraint("role IN ('admin','user')"),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
     ding_corp_id: Mapped[str]
     ding_user_id: Mapped[str]
@@ -54,6 +65,7 @@ class Session(Base):
 
 class Profile(Base):
     """Tenant-scoped employee/customer/group snapshots, including member lists."""
+
     __tablename__ = "profiles"
     __table_args__ = (UniqueConstraint("tenant_id", "kind", "external_id"),)
     id: Mapped[int] = mapped_column(primary_key=True)

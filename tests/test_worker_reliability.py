@@ -1,4 +1,5 @@
 """Real-database regressions for capture ordering and bounded job failures."""
+
 import asyncio
 from types import SimpleNamespace
 
@@ -20,7 +21,9 @@ async def tenant(app):
 
 
 @pytest.mark.parametrize("entrypoint", ["sync", "callback"])
-async def test_group_request_order_beats_response_order_in_same_millisecond(system, monkeypatch, entrypoint):
+async def test_group_request_order_beats_response_order_in_same_millisecond(
+    system, monkeypatch, entrypoint
+):
     app, _, _ = system
     worker = app.state.worker
     group_tenant = await tenant(app)
@@ -42,9 +45,16 @@ async def test_group_request_order_beats_response_order_in_same_millisecond(syst
     async def capture():
         if entrypoint == "sync":
             return await worker.sync_group(group_tenant, "group")
-        return await worker.normalize(group_tenant, SimpleNamespace(id=-1), {
-            "Event": "change_external_chat", "ChangeType": "create",
-            "ChatId": "group", "CreateTime": "1"})
+        return await worker.normalize(
+            group_tenant,
+            SimpleNamespace(id=-1),
+            {
+                "Event": "change_external_chat",
+                "ChangeType": "create",
+                "ChatId": "group",
+                "CreateTime": "1",
+            },
+        )
 
     earlier = asyncio.create_task(capture())
     await started.wait()
@@ -62,8 +72,13 @@ async def test_capture_reservation_keeps_completed_snapshot_and_baseline_time(sy
     app, _, _ = system
     worker = app.state.worker
     group_tenant = await tenant(app)
-    await worker.put_profile(1, "group", "group", {
-        "name": "历史快照", "member_list": [{"userid": "customer", "type": 2}]}, synced_at=500)
+    await worker.put_profile(
+        1,
+        "group",
+        "group",
+        {"name": "历史快照", "member_list": [{"userid": "customer", "type": 2}]},
+        synced_at=500,
+    )
     assert await worker.reserve_group_capture(1, "group") == 1
     historical = await worker.cached(1, "group", "group")
     assert historical.synced_at == 500 and historical.name == "历史快照"
@@ -80,6 +95,7 @@ async def test_capture_reservation_keeps_completed_snapshot_and_baseline_time(sy
 
     monkeypatch.setattr("app.worker.now_ms", lambda: clock)
     monkeypatch.setattr(app.state.platforms, "group", group)
+
     async def profile(*args):
         return {"name": "客户"}, True
 
@@ -87,13 +103,20 @@ async def test_capture_reservation_keeps_completed_snapshot_and_baseline_time(sy
     await worker.sync_group(group_tenant, "group")
     saved = await worker.cached(1, "group", "group")
     assert saved.synced_at == 3000
-    snapshot = await worker.group_snapshot(group_tenant, SimpleNamespace(id=-1), {
-        "CreateTime": "2", "MemChangeCnt": "1", "QuitScene": "0"}, saved, {"member_list": []})
+    snapshot = await worker.group_snapshot(
+        group_tenant,
+        SimpleNamespace(id=-1),
+        {"CreateTime": "2", "MemChangeCnt": "1", "QuitScene": "0"},
+        saved,
+        {"member_list": []},
+    )
     assert snapshot["_before_members"] is None
     assert snapshot["member_evidence"] == "no_before_snapshot"
 
 
-async def test_old_prefetch_final_write_cannot_replace_new_capture_in_same_millisecond(system, monkeypatch):
+async def test_old_prefetch_final_write_cannot_replace_new_capture_in_same_millisecond(
+    system, monkeypatch
+):
     app, _, _ = system
     worker = app.state.worker
     group_tenant = await tenant(app)
@@ -127,7 +150,9 @@ async def test_old_prefetch_final_write_cannot_replace_new_capture_in_same_milli
     assert saved.capture_version == 2 and saved.synced_at == 1000
 
 
-async def test_failed_new_capture_does_not_allow_an_earlier_response_to_replace_history(system, monkeypatch):
+async def test_failed_new_capture_does_not_allow_an_earlier_response_to_replace_history(
+    system, monkeypatch
+):
     app, _, _ = system
     worker = app.state.worker
     group_tenant = await tenant(app)
@@ -160,21 +185,37 @@ async def test_failed_new_capture_does_not_allow_an_earlier_response_to_replace_
 async def test_concurrent_profile_creation_uses_one_identity_row(system):
     app, _, _ = system
     worker = app.state.worker
-    await asyncio.gather(*(worker.put_profile(1, "customer", "same", {"name": f"客户{i}"})
-                           for i in range(8)))
+    await asyncio.gather(
+        *(worker.put_profile(1, "customer", "same", {"name": f"客户{i}"}) for i in range(8))
+    )
     async with app.state.sessions() as db:
-        assert await db.scalar(select(func.count()).select_from(Profile).where(
-            Profile.tenant_id == 1, Profile.kind == "customer", Profile.external_id == "same")) == 1
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(Profile)
+                .where(
+                    Profile.tenant_id == 1,
+                    Profile.kind == "customer",
+                    Profile.external_id == "same",
+                )
+            )
+            == 1
+        )
     await worker.put_profile(2, "customer", "same", {"name": "另一个主体"})
     assert (await worker.cached(2, "customer", "same")).name == "另一个主体"
 
 
-@pytest.mark.parametrize("broken,error", [(b"invalid-ciphertext", "InvalidToken"),
-                                         (b"{private-invalid-json", "JSONDecodeError")])
+@pytest.mark.parametrize(
+    "broken,error",
+    [(b"invalid-ciphertext", "InvalidToken"), (b"{private-invalid-json", "JSONDecodeError")],
+)
 async def test_bad_payload_converges_and_does_not_block_later_jobs(system, broken, error):
     app, _, _ = system
-    encrypted = broken if error == "InvalidToken" else Fernet(
-        app.state.settings.payload_key.encode()).encrypt(broken)
+    encrypted = (
+        broken
+        if error == "InvalidToken"
+        else Fernet(app.state.settings.payload_key.encode()).encrypt(broken)
+    )
     async with app.state.sessions() as db:
         inbox = Inbox(tenant_id=1, dedupe_key="broken", payload_encrypted=encrypted)
         db.add(inbox)

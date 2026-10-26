@@ -1,4 +1,5 @@
 """Inspect recent callback processing using read-only SQLite and redacted output."""
+
 import argparse
 import json
 import re
@@ -31,11 +32,24 @@ def event_fields(payload):
 def safe_error(value):
     if not value:
         return None
-    if value in {"tenant_disabled", "profile_incomplete", "wecom_secret_not_configured",
-                 "platform_transport_error", "TimeoutError", "ValueError", "KeyError",
-                 "TypeError", "IntegrityError", "OperationalError", "contact_identity_fields_missing",
-                 "group_chat_id_missing", "group_member_count_invalid", "group_snapshot_not_conclusive",
-                 "group_member_profile_incomplete", "avatar_unavailable"}:
+    if value in {
+        "tenant_disabled",
+        "profile_incomplete",
+        "wecom_secret_not_configured",
+        "platform_transport_error",
+        "TimeoutError",
+        "ValueError",
+        "KeyError",
+        "TypeError",
+        "IntegrityError",
+        "OperationalError",
+        "contact_identity_fields_missing",
+        "group_chat_id_missing",
+        "group_member_count_invalid",
+        "group_snapshot_not_conclusive",
+        "group_member_profile_incomplete",
+        "avatar_unavailable",
+    }:
         return value
     if re.fullmatch(r"platform_error_-?[0-9]{1,10}", value):
         return value
@@ -60,7 +74,8 @@ def inspect_callbacks(settings, limit=10):
     with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True) as db:
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA query_only=ON")
-        rows = db.execute("""
+        rows = db.execute(
+            """
             SELECT i.id, i.tenant_id, i.received_at, i.payload_encrypted,
                    t.enabled, j.status, j.attempts, j.last_error,
                    (SELECT count(*) FROM business_events e WHERE e.callback_id=i.id) AS event_count
@@ -68,14 +83,20 @@ def inspect_callbacks(settings, limit=10):
             JOIN tenants t ON t.id=i.tenant_id
             LEFT JOIN processing_jobs j ON j.callback_id=i.id
             ORDER BY i.id DESC LIMIT ?
-        """, (limit,)).fetchall()
+        """,
+            (limit,),
+        ).fetchall()
         output = []
         for row in rows:
             item = {
-                "callback_id": row["id"], "tenant_id": row["tenant_id"],
-                "tenant_enabled": bool(row["enabled"]), "received_at": stamp(row["received_at"]),
-                "job_status": row["status"], "attempts": row["attempts"],
-                "last_error": safe_error(row["last_error"]), "event_count": row["event_count"],
+                "callback_id": row["id"],
+                "tenant_id": row["tenant_id"],
+                "tenant_enabled": bool(row["enabled"]),
+                "received_at": stamp(row["received_at"]),
+                "job_status": row["status"],
+                "attempts": row["attempts"],
+                "last_error": safe_error(row["last_error"]),
+                "event_count": row["event_count"],
             }
             try:
                 payload = json.loads(cipher.decrypt(row["payload_encrypted"]))
@@ -94,18 +115,28 @@ def inspect_callbacks(settings, limit=10):
                 "SELECT event_type, occurred_at FROM business_events WHERE callback_id=? ORDER BY id",
                 (row["id"],),
             ).fetchall()
-            known_types = {"contact_added", "contact_deleted", "group_left", "group_removed",
-                           "group_change_unknown"}
-            item["events"] = [{
-                "type": e["event_type"] if e["event_type"] in known_types else "unknown",
-                "time": stamp(e["occurred_at"]),
-            } for e in events]
+            known_types = {
+                "contact_added",
+                "contact_deleted",
+                "group_left",
+                "group_removed",
+                "group_change_unknown",
+            }
+            item["events"] = [
+                {
+                    "type": e["event_type"] if e["event_type"] in known_types else "unknown",
+                    "time": stamp(e["occurred_at"]),
+                }
+                for e in events
+            ]
             output.append(item)
     return {"worker_enabled": settings.worker_enabled, "callbacks": output}
 
 
 def main():
-    parser = argparse.ArgumentParser(description="只读检查最近回调、任务和事件；不输出密钥或人员资料")
+    parser = argparse.ArgumentParser(
+        description="只读检查最近回调、任务和事件；不输出密钥或人员资料"
+    )
     parser.add_argument("--limit", type=int, default=10, choices=range(1, 101), metavar="1-100")
     args = parser.parse_args()
     try:

@@ -13,6 +13,7 @@
 
 所有压测端点均为 GET,无需 CSRF 头。请勿对生产环境执行。
 """
+
 import os
 import random
 
@@ -27,16 +28,18 @@ class ReportViewer(HttpUser):
         if cookie:
             self.client.headers["Cookie"] = cookie
             return
-        response = self.client.post("/api/v1/auth/demo",
-                                    json={"password": os.environ.get("DEMO_PASSWORD", ""),
-                                          "role": "admin"},
-                                    headers={"Content-Type": "application/json"})
+        response = self.client.post(
+            "/api/v1/auth/demo",
+            json={"password": os.environ.get("DEMO_PASSWORD", ""), "role": "admin"},
+            headers={"Content-Type": "application/json"},
+        )
         if response.status_code == 429:
             # 限流时退避后重试,避免并发启动阶段的登录风暴。
-            response = self.client.post("/api/v1/auth/demo",
-                                        json={"password": os.environ.get("DEMO_PASSWORD", ""),
-                                              "role": "admin"},
-                                        headers={"Content-Type": "application/json"})
+            response = self.client.post(
+                "/api/v1/auth/demo",
+                json={"password": os.environ.get("DEMO_PASSWORD", ""), "role": "admin"},
+                headers={"Content-Type": "application/json"},
+            )
         response.raise_for_status()
         cookie_value = response.cookies.get("monitor_session")
         if cookie_value:

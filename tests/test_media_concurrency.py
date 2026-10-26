@@ -1,4 +1,5 @@
 """Concurrent downloads share immutable media without unique-key failures."""
+
 import asyncio
 import hashlib
 from pathlib import Path
@@ -60,8 +61,14 @@ async def test_same_avatar_concurrent_downloads_share_one_row(system, monkeypatc
 
     monkeypatch.setattr(AsyncSession, "scalar", scalar)
     async with asyncio.timeout(10):
-        ids = await asyncio.gather(*(save_avatar(app.state.settings, app.state.sessions,
-            1, "https://wx.qlogo.cn/shared-avatar") for _ in range(3)))
+        ids = await asyncio.gather(
+            *(
+                save_avatar(
+                    app.state.settings, app.state.sessions, 1, "https://wx.qlogo.cn/shared-avatar"
+                )
+                for _ in range(3)
+            )
+        )
     assert isinstance(ids[0], int) and ids == [ids[0]] * 3
     async with app.state.sessions() as db:
         assert await db.scalar(select(func.count()).select_from(Media)) == 1
@@ -74,15 +81,18 @@ async def test_same_avatar_concurrent_downloads_share_one_row(system, monkeypatc
 async def test_identical_avatar_is_isolated_by_tenant_and_not_rewritten(system, monkeypatch):
     app, _, _ = system
     mock_download(monkeypatch, lambda request: httpx.Response(200, content=AVATAR))
-    first = await save_avatar(app.state.settings, app.state.sessions, 1,
-                              "https://wx.qlogo.cn/shared-avatar")
+    first = await save_avatar(
+        app.state.settings, app.state.sessions, 1, "https://wx.qlogo.cn/shared-avatar"
+    )
     checksum = hashlib.sha256(AVATAR).hexdigest()
     first_path = Path(app.state.settings.media_dir) / "1" / checksum
     original_stat = first_path.stat()
-    again = await save_avatar(app.state.settings, app.state.sessions, 1,
-                              "https://wx.qlogo.cn/shared-avatar")
-    second = await save_avatar(app.state.settings, app.state.sessions, 2,
-                               "https://wx.qlogo.cn/shared-avatar")
+    again = await save_avatar(
+        app.state.settings, app.state.sessions, 1, "https://wx.qlogo.cn/shared-avatar"
+    )
+    second = await save_avatar(
+        app.state.settings, app.state.sessions, 2, "https://wx.qlogo.cn/shared-avatar"
+    )
     assert first == again and first != second
     assert first_path.stat().st_mtime_ns == original_stat.st_mtime_ns
     assert first_path.read_bytes() == AVATAR
@@ -100,8 +110,9 @@ async def test_failed_file_publish_cleans_temporary_file_without_media_row(syste
 
     monkeypatch.setattr("app.media.os.replace", failed_replace)
     with pytest.raises(OSError, match="fixture_file_publish_failed"):
-        await save_avatar(app.state.settings, app.state.sessions, 1,
-                          "https://wx.qlogo.cn/shared-avatar")
+        await save_avatar(
+            app.state.settings, app.state.sessions, 1, "https://wx.qlogo.cn/shared-avatar"
+        )
     assert list((Path(app.state.settings.media_dir) / "1").iterdir()) == []
     async with app.state.sessions() as db:
         assert await db.scalar(select(func.count()).select_from(Media)) == 0

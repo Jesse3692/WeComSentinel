@@ -1,4 +1,5 @@
 """Regressions for defects observed in real DingTalk acceptance (isolated data)."""
+
 from sqlalchemy import delete
 
 from app.models import BusinessEvent, Grant
@@ -31,7 +32,9 @@ async def test_unknown_source_zero_null_and_other_are_disjoint(system):
             ids.extend(r["id"] for r in data["items"])
             if not data["next_cursor"]:
                 break
-            params.update(cursor=data["next_cursor"], start_date=data["range"][0], end_date=data["range"][1])
+            params.update(
+                cursor=data["next_cursor"], start_date=data["range"][0], end_date=data["range"][1]
+            )
         assert set(ids) == {expected[c] for c in codes}
         assert len(ids) == len(set(ids))
 
@@ -57,7 +60,9 @@ async def test_existing_session_after_all_grants_revoked(system, monkeypatch):
         assert (await client.get(f"/api/v1/events/{event_id}")).status_code == 404
     assert (await client.get("/api/v1/media/1")).status_code == 404
     assert (await client.get("/api/v1/admin/users")).status_code == 403
-    assert (await client.patch("/api/v1/me/preferences", json={"last_tenant_id": 1})).status_code == 403
+    assert (
+        await client.patch("/api/v1/me/preferences", json={"last_tenant_id": 1})
+    ).status_code == 403
     assert (await client.post("/api/v1/auth/logout", json={})).status_code == 200
     assert (await client.get("/api/v1/me")).status_code == 401
 

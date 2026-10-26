@@ -67,8 +67,9 @@ async def save_avatar(settings, sessions, tenant_id, url):
         # truncate a content-addressed file that another request is serving.
         temporary = None
         try:
-            with NamedTemporaryFile(dir=path.parent, prefix=f".{checksum}.", suffix=".tmp",
-                                    delete=False) as output:
+            with NamedTemporaryFile(
+                dir=path.parent, prefix=f".{checksum}.", suffix=".tmp", delete=False
+            ) as output:
                 temporary = Path(output.name)
                 output.write(data)
             os.replace(temporary, path)
@@ -76,11 +77,21 @@ async def save_avatar(settings, sessions, tenant_id, url):
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
     async with sessions() as db:
-        await db.execute(insert(Media).values(
-            tenant_id=tenant_id, sha256=checksum, relative_path=relative,
-            mime_type=mime, size_bytes=len(data)).on_conflict_do_nothing(
-                index_elements=[Media.tenant_id, Media.sha256]))
-        media_id = (await db.execute(select(Media.id).where(
-            Media.tenant_id == tenant_id, Media.sha256 == checksum))).scalar_one()
+        await db.execute(
+            insert(Media)
+            .values(
+                tenant_id=tenant_id,
+                sha256=checksum,
+                relative_path=relative,
+                mime_type=mime,
+                size_bytes=len(data),
+            )
+            .on_conflict_do_nothing(index_elements=[Media.tenant_id, Media.sha256])
+        )
+        media_id = (
+            await db.execute(
+                select(Media.id).where(Media.tenant_id == tenant_id, Media.sha256 == checksum)
+            )
+        ).scalar_one()
         await db.commit()
         return media_id

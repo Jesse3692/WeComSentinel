@@ -1,4 +1,5 @@
 """Build locally, upload a release over SSH, restart and verify the Linux service."""
+
 import argparse
 import base64
 import json
@@ -54,12 +55,17 @@ def connection(config):
     common = ["-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15"]
     if config.get("identity_file"):
         common += ["-i", str(Path(config["identity_file"]).expanduser().resolve())]
-    return ["ssh", "-p", str(port), *common], ["scp", "-P", str(port), *common], f"{user}@{host}", remote
+    return (
+        ["ssh", "-p", str(port), *common],
+        ["scp", "-P", str(port), *common],
+        f"{user}@{host}",
+        remote,
+    )
 
 
 def bootstrap(remote, stage, config):
     # Runs with the server's existing venv Python, before touching deployed source.
-    return f'''
+    return f"""
 import os, pathlib, subprocess, zipfile
 root = pathlib.Path({remote!r})
 stage = pathlib.Path({stage!r})
@@ -72,19 +78,21 @@ with zipfile.ZipFile(stage / 'release.zip') as archive:
     archive.extractall(stage / 'source')
 command = [str(root / '.venv/bin/python'), str(stage / 'source/deploy/update.py'),
            '--project-root', str(root), '--bundle', str(stage / 'source'),
-           '--port', {str(int(config.get('app_port', 8000)))!r},
-           '--timeout', {str(int(config.get('timeout', 90)))!r}]
-service = {config.get('service', '')!r}
+           '--port', {str(int(config.get("app_port", 8000)))!r},
+           '--timeout', {str(int(config.get("timeout", 90)))!r}]
+service = {config.get("service", "")!r}
 if service:
     command += ['--service', service]
 raise SystemExit(subprocess.call(command, cwd=root))
-'''
+"""
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=ROOT / "deploy/sync.local.json")
-    parser.add_argument("--build-only", action="store_true", help="Build/package locally without SSH")
+    parser.add_argument(
+        "--build-only", action="store_true", help="Build/package locally without SSH"
+    )
     args = parser.parse_args()
     try:
         config = {} if args.build_only else json.loads(args.config.read_text(encoding="utf-8-sig"))

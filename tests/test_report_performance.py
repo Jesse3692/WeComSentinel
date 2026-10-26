@@ -1,4 +1,5 @@
 """Report-path regressions: dashboard TTL cache and anchored event pages."""
+
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -32,7 +33,9 @@ async def test_dashboard_cache_hides_late_writes_until_expiry(system):
     assert cached["pending_jobs"] == 0 and cached["updated_at"] >= first["updated_at"]
     # A different query shape is a different cache entry and sees the new row.
     start, end = week_window()
-    ranged = (await client.get(f"/api/v1/dashboard?start_date={start}&end_date={end}")).json()["data"]
+    ranged = (await client.get(f"/api/v1/dashboard?start_date={start}&end_date={end}")).json()[
+        "data"
+    ]
     assert ranged["cards"][0]["value"] == 2
 
 
@@ -56,11 +59,15 @@ async def test_event_pages_keep_anchor_and_return_totals(system):
     first = (await client.get("/api/v1/events?limit=20")).json()["data"]
     assert first["total_records"] == 25 and first["total_quantity"] == sum(range(1, 26))
     assert len(first["items"]) == 20 and first["next_cursor"]
-    second = (await client.get(f"/api/v1/events?limit=20&cursor={first['next_cursor']}")).json()["data"]
+    second = (await client.get(f"/api/v1/events?limit=20&cursor={first['next_cursor']}")).json()[
+        "data"
+    ]
     assert second["total_records"] == 25 and second["total_quantity"] == first["total_quantity"]
     assert len(second["items"]) == 5 and not second["next_cursor"]
     # Returning through the anchor keeps the ID boundary and recomputes totals.
-    anchored = (await client.get(f"/api/v1/events?limit=20&cursor={first['page_cursor']}")).json()["data"]
+    anchored = (await client.get(f"/api/v1/events?limit=20&cursor={first['page_cursor']}")).json()[
+        "data"
+    ]
     assert anchored["total_records"] == 25
 
 
@@ -73,8 +80,10 @@ async def test_legacy_cursor_without_totals_still_returns_correct_totals(system)
     decoded = decode_cursor(listing["page_cursor"], app.state.settings.secret_key)
     assert "total" in decoded and "quantity" in decoded
     # A cursor from the previous format carries no totals field.
-    legacy = encode_cursor({"upper": decoded["upper"], "filter": decoded["filter"],
-                            "time": None, "id": None}, app.state.settings.secret_key)
+    legacy = encode_cursor(
+        {"upper": decoded["upper"], "filter": decoded["filter"], "time": None, "id": None},
+        app.state.settings.secret_key,
+    )
     response = (await client.get(f"/api/v1/events?limit=4&cursor={legacy}")).json()["data"]
     assert response["total_records"] == 6 and response["total_quantity"] == 6
     assert response["items"][0]["occurred_at"] <= now_ms()
@@ -88,7 +97,15 @@ async def test_media_response_is_long_cacheable(system):
     (media_dir / "1").mkdir(exist_ok=True)
     (media_dir / "1" / "a").write_bytes(b"\x89PNG\r\n\x1a\nrest")
     async with app.state.sessions() as db:
-        db.add(Media(tenant_id=1, sha256="a" * 64, relative_path="1/a", mime_type="image/png", size_bytes=12))
+        db.add(
+            Media(
+                tenant_id=1,
+                sha256="a" * 64,
+                relative_path="1/a",
+                mime_type="image/png",
+                size_bytes=12,
+            )
+        )
         await db.commit()
         media_id = await db.scalar(select(func.max(Media.id)))
     response = await client.get(f"/api/v1/media/{media_id}")

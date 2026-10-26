@@ -37,15 +37,28 @@ class Settings(BaseSettings):
     def validate_runtime(self):
         if self.assistant_base_url:
             endpoint = urlsplit(self.assistant_base_url)
-            if (endpoint.scheme not in ("http", "https") or not endpoint.hostname
-                    or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment):
-                raise RuntimeError("ASSISTANT_BASE_URL must be an HTTP(S) base URL without credentials")
+            if (
+                endpoint.scheme not in ("http", "https")
+                or not endpoint.hostname
+                or endpoint.username
+                or endpoint.password
+                or endpoint.query
+                or endpoint.fragment
+            ):
+                raise RuntimeError(
+                    "ASSISTANT_BASE_URL must be an HTTP(S) base URL without credentials"
+                )
         if len(self.secret_key) < 32 or self.secret_key.startswith("replace-"):
             raise RuntimeError("Set SECRET_KEY to a random value of at least 32 characters")
         from cryptography.fernet import Fernet
+
         Fernet(self.payload_key.encode())
         if self.app_env == "production":
-            if self.demo_enabled or not self.cookie_secure or not self.public_origin.startswith("https://"):
+            if (
+                self.demo_enabled
+                or not self.cookie_secure
+                or not self.public_origin.startswith("https://")
+            ):
                 raise RuntimeError("Production requires HTTPS, secure cookies and disabled demo")
         if self.demo_enabled and len(self.demo_password) < 12:
             raise RuntimeError("Demo requires a password of at least 12 characters")
@@ -53,8 +66,10 @@ class Settings(BaseSettings):
     def credential(self, ref: str) -> dict:
         values = {**dotenv_values(".env"), **os.environ}
         prefix = f"WECOM_{ref.upper()}_"
-        return {k: values.get(prefix + suffix, "") for k, suffix in (
-            ("secret", "SECRET"), ("token", "TOKEN"), ("aes_key", "AES_KEY"))}
+        return {
+            k: values.get(prefix + suffix, "")
+            for k, suffix in (("secret", "SECRET"), ("token", "TOKEN"), ("aes_key", "AES_KEY"))
+        }
 
     def prepare_dirs(self):
         Path(self.media_dir).mkdir(parents=True, exist_ok=True)

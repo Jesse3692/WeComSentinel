@@ -25,8 +25,10 @@ def parse_xml(value: bytes | str) -> dict:
             # MemChangeList/Item contains CDATA text, not nested key/value pairs.
             # Preserve the exact member identifiers instead of producing [{}].
             if child.tag == "MemChangeList":
-                result[child.tag] = [item.text or "" if not len(item) else
-                                     dict((x.tag, x.text or "") for x in item) for item in child]
+                result[child.tag] = [
+                    item.text or "" if not len(item) else dict((x.tag, x.text or "") for x in item)
+                    for item in child
+                ]
             else:
                 result[child.tag] = [dict((x.tag, x.text or "") for x in item) for item in child]
         else:
@@ -55,7 +57,7 @@ def decrypt_callback(encrypted, token, aes_key, corp_id, timestamp, nonce, suppl
     length = struct.unpack("!I", data[16:20])[0]
     if length > len(data) - 20:
         raise ValueError("Invalid payload length")
-    message, receiver = data[20:20 + length], data[20 + length:]
+    message, receiver = data[20 : 20 + length], data[20 + length :]
     if not hmac.compare_digest(receiver, corp_id.encode()):
         raise ValueError("Invalid receiver")
     return message
@@ -68,7 +70,9 @@ def encode_cursor(data, secret):
 
 def decode_cursor(value, secret):
     raw, sig = value.rsplit(".", 1)
-    if not hmac.compare_digest(sig, hmac.new(secret.encode(), raw.encode(), hashlib.sha256).hexdigest()):
+    if not hmac.compare_digest(
+        sig, hmac.new(secret.encode(), raw.encode(), hashlib.sha256).hexdigest()
+    ):
         raise ValueError("Invalid cursor")
     return json.loads(base64.urlsafe_b64decode(raw))
 
